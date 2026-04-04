@@ -1,8 +1,11 @@
 import os
 import asyncio
 import threading
+import warnings
 from flask import Flask
-from bot_main import main
+
+# Игнорируем предупреждения
+warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 
@@ -12,36 +15,35 @@ def health():
     return "OK", 200
 
 def run_bot():
-    """Запуск бота с игнорированием ошибок сигналов"""
+    """Запуск бота в отдельном потоке"""
     print("🚀 Запускаем Telegram бота...")
     try:
-        # Создаем отдельный event loop
+        # Импортируем main здесь, чтобы избежать проблем с event loop
+        from bot_main import main
+        
+        # Создаем новый event loop для этого потока
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Отключаем обработку сигналов в этом потоке
-        import signal
-        original_handlers = {}
-        for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]:
-            original_handlers[sig] = signal.signal(sig, signal.SIG_IGN)
+        # Запускаем бота
+        main()
         
-        try:
-            main()
-        finally:
-            # Восстанавливаем обработчики
-            for sig, handler in original_handlers.items():
-                signal.signal(sig, handler)
-                
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка бота: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🏥 Health check сервер на порту {port}")
     
-    # Запускаем бота в фоновом потоке
+    # Запускаем бота в потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
+    
+    # Даем боту время на инициализацию
+    import time
+    time.sleep(2)
     
     # Запускаем Flask
     app.run(host="0.0.0.0", port=port, debug=False)
