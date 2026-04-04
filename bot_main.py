@@ -725,11 +725,11 @@ def main() -> None:
 
     app = build_application()
     try:
-        # ✅ ЕДИНСТВЕННОЕ ИЗМЕНЕНИЕ: добавляем signal_handlers=False
+        # Убираем signal_handlers и используем обычный run_polling
+        # Проблема с сигналами в потоке не критична для работы бота
         app.run_polling(
             close_loop=False, 
-            drop_pending_updates=True,
-            signal_handlers=False  # <--- ЭТО КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+            drop_pending_updates=True
         )
     except (TimedOut, NetworkError) as exc:
         print(
