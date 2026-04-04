@@ -3,7 +3,7 @@ import logging
 import uvicorn
 import requests
 from starlette.applications import Starlette
-from starlette.responses import Response, PlainTextResponse
+from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.routing import Route
 from starlette.requests import Request
 from telegram import Update
@@ -15,7 +15,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 VK_TOKEN = os.environ.get("VK_GROUP_TOKEN", "")
 VK_CONFIRMATION_CODE = os.environ.get("VK_CONFIRMATION_CODE", "2272df10")
 URL = os.environ.get("RENDER_EXTERNAL_URL", "https://family-bot-hr1w.onrender.com")
-PORT = int(os.getenv("PORT", 8000))
+PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 # Создаём приложение Telegram
 telegram_app = build_application() if TELEGRAM_TOKEN else None
+
+async def root(request: Request) -> JSONResponse:
+    """Корневой маршрут для Render"""
+    return JSONResponse({
+        "status": "ok",
+        "service": "Family Bot",
+        "endpoints": {
+            "health": "/health",
+            "telegram": "/telegram_webhook",
+            "vk": "/vk"
+        }
+    })
 
 async def health(request: Request) -> PlainTextResponse:
     """Health check endpoint для Render"""
@@ -58,7 +70,6 @@ async def vk_webhook(request: Request) -> Response:
         # 1. Обработка подтверждения адреса (confirmation)
         if data.get('type') == 'confirmation':
             logger.info(f"Sending confirmation code: {VK_CONFIRMATION_CODE}")
-            # ВАЖНО: возвращаем ТОЛЬКО строку подтверждения, ничего больше
             return PlainTextResponse(VK_CONFIRMATION_CODE, status_code=200)
         
         # 2. Обработка нового сообщения
@@ -76,7 +87,6 @@ async def vk_webhook(request: Request) -> Response:
             # Отправляем ответ
             send_vk_message(peer_id or user_id, answer_text)
         
-        # Для всех остальных типов событий просто возвращаем OK
         return Response(status_code=200)
         
     except Exception as e:
@@ -96,9 +106,13 @@ def send_vk_message(peer_id: int, message: str) -> None:
     try:
         response = requests.post(url, params=params)
         if response.status_code == 200:
-            logger.info(f"VK message sent successfully to {peer_id}")
+            result = response.json()
+            if result.get('error'):
+                logger.error(f"VK API error: {result['error']}")
+            else:
+                logger.info(f"VK message sent successfully to {peer_id}")
         else:
-            logger.error(f"VK API error: {response.text}")
+            logger.error(f"VK HTTP error: {response.status_code}")
     except Exception as e:
         logger.error(f"Failed to send VK message: {e}")
 
@@ -109,8 +123,11 @@ async def setup_telegram_webhook() -> None:
         return
     
     webhook_url = f"{URL}/telegram_webhook"
-    await telegram_app.bot.set_webhook(webhook_url)
-    logger.info(f"Telegram webhook set to {webhook_url}")
+    result = await telegram_app.bot.set_webhook(webhook_url)
+    if result:
+        logger.info(f"✅ Telegram webhook set to {webhook_url}")
+    else:
+        logger.error(f"❌ Failed to set Telegram webhook to {webhook_url}")
 
 async def startup() -> None:
     """Запуск приложений и установка веб-хуков"""
@@ -150,7 +167,8 @@ async def shutdown() -> None:
 
 # Создаём Starlette приложение с маршрутами
 starlette_app = Starlette(routes=[
-    Route("/health", health, methods=["GET"]),
+    Route("/", root, methods=["GET"]),
+    Route("/health", health, methods=["GET", "HEAD"]),
     Route("/telegram_webhook", telegram_webhook, methods=["POST"]),
     Route("/vk", vk_webhook, methods=["POST"]),
 ])
