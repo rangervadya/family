@@ -1,16 +1,8 @@
 import os
+import asyncio
 import threading
-import time
 from flask import Flask
-
-# Импортируйте вашу функцию main из bot_main.py
-# Если функция называется по-другому, исправьте
-try:
-    from bot_main import main
-except ImportError:
-    print("❌ Не удалось импортировать main из bot_main.py")
-    print("Проверьте, что файл bot_main.py существует и функция называется main()")
-    raise
+from bot_main import main
 
 app = Flask(__name__)
 
@@ -19,17 +11,25 @@ app = Flask(__name__)
 def health():
     return "OK", 200
 
-@app.route('/ping')
-def ping():
-    return "pong", 200
-
 def run_bot():
-    """Запуск бота в отдельном потоке"""
+    """Запуск бота с правильным event loop"""
     print("🚀 Запускаем Telegram бота в фоновом потоке...")
     try:
+        # Создаем новый event loop для этого потока
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Если main - синхронная функция
         main()
+        
+        # ИЛИ если main - асинхронная, используйте:
+        # loop.run_until_complete(main())
+        
+        loop.run_forever()
     except Exception as e:
         print(f"❌ Ошибка в боте: {e}")
+        import traceback
+        traceback.print_exc()
 
 def run_health_server():
     """Запуск Flask сервера для health checks"""
@@ -42,15 +42,12 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Запуск сервиса...")
     print(f"Python version: {os.sys.version}")
-    print(f"PORT: {os.environ.get('PORT', '5000 (default)')}")
+    print(f"PORT: {os.environ.get('PORT', '10000 (default)')}")
     print("=" * 50)
     
-    # Запускаем бота в фоновом потоке
+    # Запускаем бота в отдельном потоке с правильным event loop
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    
-    # Даем боту немного времени на инициализацию
-    time.sleep(2)
     
     # Запускаем health сервер в основном потоке
     run_health_server()
