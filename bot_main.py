@@ -751,5 +751,5 @@ def main() -> None:
         raise SystemExit(1) from exc
 
 
-if __name__ == "__main__":
-    main()
+def get_application():
+    return build_application()
