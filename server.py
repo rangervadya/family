@@ -12,36 +12,36 @@ def health():
     return "OK", 200
 
 def run_bot():
-    """Запуск бота в фоновом потоке"""
-    print("🚀 Запускаем Telegram бота в фоновом потоке...")
+    """Запуск бота с игнорированием ошибок сигналов"""
+    print("🚀 Запускаем Telegram бота...")
     try:
-        # Создаем новый event loop для этого потока
+        # Создаем отдельный event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Запускаем main в этом потоке
-        main()
+        # Отключаем обработку сигналов в этом потоке
+        import signal
+        original_handlers = {}
+        for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]:
+            original_handlers[sig] = signal.signal(sig, signal.SIG_IGN)
         
+        try:
+            main()
+        finally:
+            # Восстанавливаем обработчики
+            for sig, handler in original_handlers.items():
+                signal.signal(sig, handler)
+                
     except Exception as e:
-        print(f"❌ Ошибка в боте: {e}")
-        import traceback
-        traceback.print_exc()
-
-def run_health_server():
-    """Запуск Flask сервера для health checks"""
-    port = int(os.environ.get("PORT", 10000))
-    print(f"🏥 Health check сервер запускается на порту {port}")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        print(f"❌ Ошибка: {e}")
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("Запуск сервиса...")
-    print(f"PORT: {os.environ.get('PORT', '10000')}")
-    print("=" * 50)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🏥 Health check сервер на порту {port}")
     
-    # Запускаем бота в отдельном потоке
+    # Запускаем бота в фоновом потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # Запускаем health сервер в основном потоке
-    run_health_server()
+    # Запускаем Flask
+    app.run(host="0.0.0.0", port=port, debug=False)
