@@ -12,31 +12,15 @@ def health():
     return "OK", 200
 
 def run_bot():
-    """Запуск бота в фоновом потоке без signal handlers"""
+    """Запуск бота в фоновом потоке"""
     print("🚀 Запускаем Telegram бота в фоновом потоке...")
     try:
-        # Создаем новый event loop
+        # Создаем новый event loop для этого потока
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Используем run_polling с отключенными signal handlers
-        # Для этого нужно модифицировать вызов main()
-        # Временно переопределяем функцию
-        from telegram.ext import Application
-        
-        # Получаем существующий application из вашего bot_main
-        # Если у вас нет доступа к application, нужно импортировать
-        import bot_main
-        app_instance = bot_main.application  # предположим, что он там есть
-        
-        # Запускаем polling без signal handlers
-        async def start():
-            await app_instance.run_polling(
-                drop_pending_updates=True,
-                signal_handlers=False  # КЛЮЧЕВОЙ ПАРАМЕТР
-            )
-        
-        loop.run_until_complete(start())
+        # Запускаем main в этом потоке
+        main()
         
     except Exception as e:
         print(f"❌ Ошибка в боте: {e}")
@@ -44,9 +28,9 @@ def run_bot():
         traceback.print_exc()
 
 def run_health_server():
-    """Запуск Flask сервера"""
+    """Запуск Flask сервера для health checks"""
     port = int(os.environ.get("PORT", 10000))
-    print(f"🏥 Health check сервер на порту {port}")
+    print(f"🏥 Health check сервер запускается на порту {port}")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
@@ -55,9 +39,9 @@ if __name__ == "__main__":
     print(f"PORT: {os.environ.get('PORT', '10000')}")
     print("=" * 50)
     
-    # Запускаем бота в потоке
+    # Запускаем бота в отдельном потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # Health сервер в основном потоке
+    # Запускаем health сервер в основном потоке
     run_health_server()
