@@ -12,42 +12,52 @@ def health():
     return "OK", 200
 
 def run_bot():
-    """Запуск бота с правильным event loop"""
+    """Запуск бота в фоновом потоке без signal handlers"""
     print("🚀 Запускаем Telegram бота в фоновом потоке...")
     try:
-        # Создаем новый event loop для этого потока
+        # Создаем новый event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Если main - синхронная функция
-        main()
+        # Используем run_polling с отключенными signal handlers
+        # Для этого нужно модифицировать вызов main()
+        # Временно переопределяем функцию
+        from telegram.ext import Application
         
-        # ИЛИ если main - асинхронная, используйте:
-        # loop.run_until_complete(main())
+        # Получаем существующий application из вашего bot_main
+        # Если у вас нет доступа к application, нужно импортировать
+        import bot_main
+        app_instance = bot_main.application  # предположим, что он там есть
         
-        loop.run_forever()
+        # Запускаем polling без signal handlers
+        async def start():
+            await app_instance.run_polling(
+                drop_pending_updates=True,
+                signal_handlers=False  # КЛЮЧЕВОЙ ПАРАМЕТР
+            )
+        
+        loop.run_until_complete(start())
+        
     except Exception as e:
         print(f"❌ Ошибка в боте: {e}")
         import traceback
         traceback.print_exc()
 
 def run_health_server():
-    """Запуск Flask сервера для health checks"""
-    port = int(os.environ.get("PORT", 5000))
-    print(f"🏥 Health check сервер запускается на порту {port}")
-    print(f"🌐 Проверьте: http://localhost:{port}/health")
+    """Запуск Flask сервера"""
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🏥 Health check сервер на порту {port}")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     print("=" * 50)
     print("Запуск сервиса...")
-    print(f"Python version: {os.sys.version}")
-    print(f"PORT: {os.environ.get('PORT', '10000 (default)')}")
+    print(f"PORT: {os.environ.get('PORT', '10000')}")
     print("=" * 50)
     
-    # Запускаем бота в отдельном потоке с правильным event loop
+    # Запускаем бота в потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # Запускаем health сервер в основном потоке
+    # Health сервер в основном потоке
     run_health_server()
