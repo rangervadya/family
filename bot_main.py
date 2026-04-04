@@ -725,7 +725,12 @@ def main() -> None:
 
     app = build_application()
     try:
-        app.run_polling(close_loop=False, drop_pending_updates=True)
+        # ✅ ЕДИНСТВЕННОЕ ИЗМЕНЕНИЕ: добавляем signal_handlers=False
+        app.run_polling(
+            close_loop=False, 
+            drop_pending_updates=True,
+            signal_handlers=False  # <--- ЭТО КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+        )
     except (TimedOut, NetworkError) as exc:
         print(
             "\n──────── Не удаётся достучаться до Telegram (api.telegram.org) ────────\n"
@@ -748,4 +753,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
