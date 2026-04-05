@@ -13,7 +13,7 @@ from bot_main import build_application
 # Настройки
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 VK_TOKEN = os.environ.get("VK_GROUP_TOKEN", "")
-VK_CONFIRMATION_CODE = os.environ.get("VK_CONFIRMATION_CODE", "2272df10")
+VK_CONFIRMATION_CODE = os.environ.get("VK_CONFIRMATION_CODE", "e1388965")  # Обновленный код
 URL = os.environ.get("RENDER_EXTERNAL_URL", "https://family-bot-hr1w.onrender.com")
 PORT = int(os.getenv("PORT", 10000))
 
@@ -58,17 +58,26 @@ async def telegram_webhook(request: Request) -> Response:
 
 async def vk_webhook(request: Request) -> Response:
     """Endpoint для Callback API ВКонтакте"""
+    logger.info(f"VK webhook called with method: {request.method}")
+    
+    # Проверяем, что это POST-запрос
+    if request.method != "POST":
+        logger.warning(f"Wrong method: {request.method}")
+        return PlainTextResponse("Method not allowed", status_code=405)
+    
     if not VK_TOKEN:
         logger.warning("VK_GROUP_TOKEN not set")
         return Response(status_code=404)
     
     try:
+        # Получаем данные из запроса
         data = await request.json()
         logger.info(f"VK webhook received: {data}")
         
         # 1. Обработка подтверждения адреса
         if data.get('type') == 'confirmation':
             logger.info(f"Sending confirmation code: {VK_CONFIRMATION_CODE}")
+            # Возвращаем ТОЛЬКО строку подтверждения
             return PlainTextResponse(VK_CONFIRMATION_CODE, status_code=200)
         
         # 2. Обработка нового сообщения
@@ -102,6 +111,7 @@ async def vk_webhook(request: Request) -> Response:
                     "✨ Скоро я научусь отвечать умнее!"
                 )
             
+            # Отправляем ответ
             send_vk_message(peer_id or user_id, answer_text)
         
         return Response(status_code=200)
@@ -180,12 +190,13 @@ async def shutdown() -> None:
         logger.info("Telegram bot stopped")
     logger.info("Shutdown complete")
 
-# Создаём Starlette приложение
+# Создаём Starlette приложение с маршрутами
+# ВАЖНО: маршрут /vk должен принимать только POST
 starlette_app = Starlette(routes=[
     Route("/", root, methods=["GET"]),
     Route("/health", health, methods=["GET", "HEAD"]),
     Route("/telegram_webhook", telegram_webhook, methods=["POST"]),
-    Route("/vk", vk_webhook, methods=["POST"]),
+    Route("/vk", vk_webhook, methods=["POST"]),  # Только POST
 ])
 
 starlette_app.add_event_handler("startup", startup)
