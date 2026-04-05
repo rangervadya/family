@@ -63,11 +63,10 @@ async def vk_webhook(request: Request) -> Response:
         return Response(status_code=404)
     
     try:
-        # Получаем данные из запроса
         data = await request.json()
         logger.info(f"VK webhook received: {data}")
         
-        # 1. Обработка подтверждения адреса (confirmation)
+        # 1. Обработка подтверждения адреса
         if data.get('type') == 'confirmation':
             logger.info(f"Sending confirmation code: {VK_CONFIRMATION_CODE}")
             return PlainTextResponse(VK_CONFIRMATION_CODE, status_code=200)
@@ -75,16 +74,34 @@ async def vk_webhook(request: Request) -> Response:
         # 2. Обработка нового сообщения
         if data.get('type') == 'message_new':
             message_obj = data.get('object', {}).get('message', {})
-            user_message = message_obj.get('text', '')
+            user_message = message_obj.get('text', '').strip().lower()
             user_id = message_obj.get('from_id')
             peer_id = message_obj.get('peer_id')
             
             logger.info(f"New VK message from {user_id}: {user_message}")
             
-            # Простой ответ (эхо)
-            answer_text = f"Вы написали: {user_message}\n\nЯ бот-компаньон. Скоро я научусь отвечать умнее!"
+            # Обработка команды start
+            if user_message in ['/start', 'начать', 'start', 'привет', 'здравствуй']:
+                answer_text = (
+                    "🌷 Здравствуйте! Я бот-компаньон «Семья».\n\n"
+                    "Я помогу вам:\n"
+                    "• 💬 Поддержать разговор\n"
+                    "• 📅 Напомнить о важном\n"
+                    "• 👥 Рассказать о событиях\n"
+                    "• 🆘 Отправить сигнал SOS близким\n\n"
+                    "Просто напишите мне любое сообщение, и мы начнём общение!"
+                )
+            else:
+                answer_text = (
+                    f"Вы написали: {user_message}\n\n"
+                    "🤖 Я бот-компаньон «Семья».\n\n"
+                    "📌 Что я умею:\n"
+                    "• Напишите «Начать» или «/start» — получить приветствие\n"
+                    "• Расскажите о себе — я запомню\n"
+                    "• Спросите о погоде — я подскажу\n\n"
+                    "✨ Скоро я научусь отвечать умнее!"
+                )
             
-            # Отправляем ответ
             send_vk_message(peer_id or user_id, answer_text)
         
         return Response(status_code=200)
@@ -137,7 +154,6 @@ async def startup() -> None:
     logger.info(f"Port: {PORT}")
     logger.info("=" * 50)
     
-    # Запускаем Telegram приложение
     if TELEGRAM_TOKEN and telegram_app:
         await telegram_app.initialize()
         await telegram_app.start()
@@ -146,7 +162,6 @@ async def startup() -> None:
     else:
         logger.warning("⚠️ Telegram bot disabled (no token)")
     
-    # Проверяем VK настройки
     if VK_TOKEN:
         logger.info("✅ VK bot configured")
         logger.info(f"   Webhook URL: {URL}/vk")
@@ -165,7 +180,7 @@ async def shutdown() -> None:
         logger.info("Telegram bot stopped")
     logger.info("Shutdown complete")
 
-# Создаём Starlette приложение с маршрутами
+# Создаём Starlette приложение
 starlette_app = Starlette(routes=[
     Route("/", root, methods=["GET"]),
     Route("/health", health, methods=["GET", "HEAD"]),
@@ -173,7 +188,6 @@ starlette_app = Starlette(routes=[
     Route("/vk", vk_webhook, methods=["POST"]),
 ])
 
-# Регистрируем обработчики старта/остановки
 starlette_app.add_event_handler("startup", startup)
 starlette_app.add_event_handler("shutdown", shutdown)
 
