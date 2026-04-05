@@ -15,6 +15,7 @@ from telegram import (
     Update,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    Voice,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -53,6 +54,7 @@ from storage import (
     get_relatives_for_senior,
 )
 from ai_service import ai_service
+from voice_processor import voice_processor
 
 # Настройка логирования
 logging.basicConfig(
@@ -97,11 +99,9 @@ async def get_weather_async(city: str) -> str:
     if not api_key:
         return None
     
-    # Нормализуем название города
     city_normalized = city.strip().lower()
     city_normalized = city_normalized.replace("ё", "е")
     
-    # Список популярных городов на русском и английском
     city_map = {
         "москва": "Moscow",
         "санкт-петербург": "Saint Petersburg",
@@ -111,14 +111,6 @@ async def get_weather_async(city: str) -> str:
         "нижний новгород": "Nizhny Novgorod",
         "краснодар": "Krasnodar",
         "сочи": "Sochi",
-        "ростов-на-дону": "Rostov-on-Don",
-        "самара": "Samara",
-        "уфа": "Ufa",
-        "омск": "Omsk",
-        "челябинск": "Chelyabinsk",
-        "воронеж": "Voronezh",
-        "пермь": "Perm",
-        "волгоград": "Volgograd",
     }
     
     variants = [city]
@@ -142,19 +134,12 @@ async def get_weather_async(city: str) -> str:
                         description = data['weather'][0]['description']
                         city_name = data['name']
                         
-                        # Эмодзи для погоды
                         weather_emoji = {
-                            "ясно": "☀️",
-                            "солнечно": "☀️",
-                            "облачно": "☁️",
-                            "пасмурно": "☁️",
-                            "дождь": "🌧️",
-                            "ливень": "🌧️",
-                            "снег": "❄️",
-                            "метель": "❄️",
-                            "гроза": "⛈️",
-                            "туман": "🌫️",
-                            "ветер": "💨"
+                            "ясно": "☀️", "солнечно": "☀️",
+                            "облачно": "☁️", "пасмурно": "☁️",
+                            "дождь": "🌧️", "ливень": "🌧️",
+                            "снег": "❄️", "метель": "❄️",
+                            "гроза": "⛈️", "туман": "🌫️", "ветер": "💨"
                         }
                         
                         emoji = "🌡️"
@@ -173,11 +158,6 @@ async def get_weather_async(city: str) -> str:
                         )
                     elif response.status == 404:
                         continue
-                    else:
-                        continue
-                        
-        except asyncio.TimeoutError:
-            continue
         except Exception as e:
             logger.error(f"Weather error for {try_city}: {e}")
             continue
@@ -313,7 +293,6 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     user_message = (update.message.text or "").strip()
     
-    # Убираем эмодзи меню
     if user_message and user_message[0] in ["💬", "📅", "👥", "🆘", "👨‍👩‍👧", "⚙️"]:
         user_message = user_message[1:].strip()
         if not user_message:
@@ -328,11 +307,10 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     user_message_lower = user_message.lower()
     
-    # 1. Погода
+    # Погода
     if any(word in user_message_lower for word in ['погод', 'прогноз', 'солнце', 'дождь', 'ветер', 'температура', 'градус']):
         city = context.user_data.get("city")
         
-        # Если в сообщении есть название города
         words = user_message.split()
         for word in words:
             if word not in ['погода', 'какая', 'прогноз', 'покажи', 'узнай']:
@@ -343,10 +321,7 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not city:
             await update.message.reply_text(
                 "🌤️ Чтобы узнать погоду, скажите мне ваш город.\n\n"
-                "Например:\n"
-                "• «Я живу в Москве»\n"
-                "• «Погода в Санкт-Петербурге»\n"
-                "• /weather Казань",
+                "Например: «Я живу в Москве» или «Погода в Санкт-Петербурге»",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
             return
@@ -360,14 +335,12 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         else:
             await update.message.reply_text(
                 f"😔 Не удалось найти погоду для города «{city}».\n\n"
-                f"Проверьте название и попробуйте ещё раз.\n"
-                f"Например: `/weather Москва`",
-                parse_mode="Markdown",
+                f"Проверьте название и попробуйте ещё раз.",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
         return
     
-    # 2. Время и дата
+    # Время и дата
     if any(word in user_message_lower for word in ['время', 'часы', 'который час', 'дата', 'сегодня', 'какой день', 'число']):
         now = datetime.now()
         await update.message.reply_text(
@@ -377,19 +350,20 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
     
-    # 3. Приветствие
+    # Приветствие
     if any(word in user_message_lower for word in ['привет', 'здравствуй', 'доброе утро', 'добрый день', 'добрый вечер', 'здрасьте', 'здравствуйте']):
         greeting = (
             f"Здравствуйте, {name}! 🌷\n\n"
             f"Чем могу помочь сегодня?\n\n"
             f"• 🌤️ Спросите «какая погода»\n"
             f"• 💊 Напишите /add_meds для напоминаний\n"
+            f"• 🎤 Отправьте голосовое сообщение\n"
             f"• 💬 Просто поболтаем — напишите что-нибудь"
         )
         await update.message.reply_text(greeting, reply_markup=MAIN_MENU_KEYBOARD)
         return
     
-    # 4. Как дела
+    # Как дела
     if any(word in user_message_lower for word in ['как дела', 'как ты', 'дела как', 'как поживаешь', 'как настроение', 'как жизнь']):
         response = (
             f"У меня всё отлично, {name}! 😊\n\n"
@@ -399,40 +373,31 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(response, reply_markup=MAIN_MENU_KEYBOARD)
         return
     
-    # 5. Помощь
+    # Помощь
     if any(word in user_message_lower for word in ['помощь', 'help', 'что умеешь', 'команды', 'функции', 'возможности', 'список команд']):
         help_text = (
             f"🤖 **Что я умею, {name}:**\n\n"
-            f"• 🌤️ **Погода** — спросите «какая погода» или «погода в Москве»\n"
+            f"• 🌤️ **Погода** — спросите «какая погода»\n"
+            f"• 🎤 **Голосовые сообщения** — отправьте голосовое\n"
             f"• 💊 **Напоминания** — команда /add_meds\n"
             f"• 💬 **Поговорить** — напишите что угодно\n"
             f"• 👨‍👩‍👧 **Семья** — кнопка в меню\n"
             f"• 🆘 **SOS** — экстренная помощь\n"
-            f"• 🕐 **Время** — спросите «который час»\n"
-            f"• 🌆 **Город** — скажите «я живу в Москве»\n\n"
+            f"• 🕐 **Время** — спросите «который час»\n\n"
             f"Я здесь, чтобы поддержать вас! 🌷"
         )
         await update.message.reply_text(help_text, reply_markup=MAIN_MENU_KEYBOARD, parse_mode="Markdown")
         return
     
-    # 6. Напоминания
-    if any(word in user_message_lower for word in ['напомни', 'напоминание', 'запомни', 'лекарств', 'таблетк', 'принять']):
-        await update.message.reply_text(
-            "💊 Чтобы добавить напоминание о лекарствах, используйте команду /add_meds\n\n"
-            "Я буду каждый день напоминать вам в выбранное время!",
-            reply_markup=MAIN_MENU_KEYBOARD,
-        )
-        return
-    
-    # 7. Спасибо
+    # Спасибо
     if any(word in user_message_lower for word in ['спасибо', 'благодарю', 'пасиб']):
         await update.message.reply_text(
-            f"Пожалуйста, {name}! 😊 Всегда рада помочь. Обращайтесь, если что-то нужно!",
+            f"Пожалуйста, {name}! 😊 Всегда рада помочь!",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    # 8. AI ответ (только если ни одно условие не сработало)
+    # AI ответ
     thinking_msg = await update.message.reply_text("🤔 Думаю над ответом...")
 
     try:
@@ -451,12 +416,74 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=MAIN_MENU_KEYBOARD,
         )
 
+# ==================== ГОЛОСОВЫЕ СООБЩЕНИЯ ====================
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка голосовых сообщений"""
+    user = update.effective_user
+    voice = update.message.voice
+    
+    if not voice:
+        return
+    
+    name = context.user_data.get("name") or (user.first_name if user else "друг")
+    
+    # Отправляем сообщение о начале обработки
+    processing_msg = await update.message.reply_text(
+        "🎤 Слушаю ваше голосовое сообщение...\n\nЭто может занять несколько секунд."
+    )
+    
+    try:
+        # Скачиваем голосовое сообщение
+        file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await file.download_as_bytearray()
+        
+        logger.info(f"Voice file size: {len(audio_bytes)} bytes")
+        
+        # Распознаём текст
+        recognized_text = await voice_processor.process_voice(bytes(audio_bytes))
+        
+        if recognized_text:
+            await processing_msg.edit_text(
+                f"📝 Я распознал(а):\n\n*\"{recognized_text}\"*\n\n🤔 Думаю над ответом...",
+                parse_mode="Markdown"
+            )
+            
+            # Генерируем ответ через AI
+            reply = await ai_service.generate_response(
+                message=recognized_text,
+                user_id=user.id if user else 0,
+                user_name=name
+            )
+            
+            await processing_msg.delete()
+            await update.message.reply_text(reply, reply_markup=MAIN_MENU_KEYBOARD)
+            
+            if user:
+                log_activity(user.id, "voice")
+        else:
+            await processing_msg.edit_text(
+                "😔 Не удалось распознать голосовое сообщение.\n\n"
+                "Попробуйте:\n"
+                "• Говорить чётче и медленнее\n"
+                "• Отправить сообщение короче\n"
+                "• Или просто напишите текстом",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            
+    except Exception as e:
+        logger.error(f"Voice handling error: {e}")
+        await processing_msg.edit_text(
+            "❌ Произошла ошибка при обработке голосового сообщения.\n\n"
+            "Попробуйте ещё раз или напишите текстом.",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+
 async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка сообщений о городе"""
     user_message = (update.message.text or "").strip()
     user = update.effective_user
     
-    # Паттерны для извлечения города
     patterns = [
         r'я живу в ([а-яА-ЯёЁa-zA-Z\s\-]+)',
         r'я из ([а-яА-ЯёЁa-zA-Z\s\-]+)',
@@ -472,17 +499,8 @@ async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         match = re.search(pattern, user_message.lower())
         if match:
             city = match.group(1).strip()
-            # Делаем первую букву заглавной
             city = city[0].upper() + city[1:] if city else None
             break
-    
-    # Если город не найден по паттерну
-    if not city and len(user_message) < 30:
-        # Исключаем команды и общие фразы
-        skip_words = ['привет', 'погода', 'спасибо', 'помощь', 'как', 'дела']
-        if user_message.lower() not in skip_words:
-            city = user_message.strip()
-            city = city[0].upper() + city[1:] if city else None
     
     if city and len(city) > 1:
         context.user_data["city"] = city
@@ -496,13 +514,10 @@ async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         await update.message.reply_text(
             f"✅ Запомнила! Ваш город: **{city}**\n\n"
-            f"🌤️ Теперь вы можете узнать погоду командой /weather",
+            f"🌤️ Теперь вы можете узнать погоду!",
             parse_mode="Markdown",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
-    else:
-        # Не отвечаем на каждое сообщение, чтобы не спамить
-        pass
 
 async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -526,10 +541,7 @@ async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_MENU_KEYBOARD)
 
 async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        social_events_overview(),
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
+    await update.message.reply_text(social_events_overview(), reply_markup=MAIN_MENU_KEYBOARD)
 
 async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -548,11 +560,7 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             try:
                 await context.bot.send_message(
                     chat_id=rel_id,
-                    text=(
-                        "🚨 ВНИМАНИЕ! 🚨\n\n"
-                        f"Ваш близкий человек нажал кнопку SOS.\n"
-                        "Пожалуйста, свяжитесь с ним как можно скорее!"
-                    ),
+                    text="🚨 ВНИМАНИЕ! 🚨\n\nВаш близкий человек нажал кнопку SOS.\nПожалуйста, свяжитесь с ним как можно скорее!",
                 )
             except Exception as e:
                 logger.warning(f"Failed to notify relative {rel_id}: {e}")
@@ -566,6 +574,7 @@ async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     lines.append(f"💬 Разговоров: {summary.get('talk', 0)}")
     lines.append(f"💊 Принято лекарств: {summary.get('reminder_done', 0)}")
     lines.append(f"🆘 Нажатий SOS: {summary.get('sos', 0)}")
+    lines.append(f"🎤 Голосовых сообщений: {summary.get('voice', 0)}")
 
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_MENU_KEYBOARD)
 
@@ -693,7 +702,15 @@ async def disable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def voice_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        voice_interface_info(),
+        "🎤 **Голосовой помощник**\n\n"
+        "Вы можете отправлять мне голосовые сообщения!\n\n"
+        "• Нажмите на значок микрофона 🎤 в Telegram\n"
+        "• Скажите, что хотите (например, «Какая погода?»)\n"
+        "• Отправьте сообщение\n"
+        "• Я распознаю речь и отвечу\n\n"
+        "Голосовые сообщения обрабатываются через нейросеть, "
+        "поэтому они могут быть неидеальны. Говорите чётко и не слишком быстро!",
+        parse_mode="Markdown",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
 
@@ -724,13 +741,11 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /weather - получить погоду"""
     user = update.effective_user
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     
     city = context.user_data.get("city")
     
-    # Если город указан в команде
     if update.message.text:
         text = update.message.text.replace("/weather", "").strip()
         if text:
@@ -740,8 +755,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             f"{name}, я не знаю ваш город.\n\n"
             f"🌆 Напишите «Я живу в Москве» или используйте команду:\n"
-            f"`/weather Москва`\n\n"
-            f"Я запомню ваш город и буду показывать погоду!",
+            f"`/weather Москва`",
             parse_mode="Markdown",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
@@ -755,10 +769,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(weather_info, parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD)
     else:
         await update.message.reply_text(
-            f"😔 {name}, не удалось найти погоду для города «{city}».\n\n"
-            f"Проверьте название и попробуйте ещё раз.\n"
-            f"Например: `/weather Москва`",
-            parse_mode="Markdown",
+            f"😔 {name}, не удалось найти погоду для города «{city}».",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
 
@@ -772,12 +783,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "**Погода:**\n"
         "• /weather — прогноз погоды\n"
         "• «Какая погода?» — спросите в чате\n\n"
+        "**Голос:**\n"
+        "• 🎤 Отправьте голосовое сообщение\n"
+        "• /voice_help — помощь по голосовым сообщениям\n\n"
         "**Здоровье:**\n"
         "• /add_meds — добавить напоминание о лекарствах\n"
         "• /enable_checkin — ежедневный опрос\n\n"
-        "**Общение:**\n"
-        "• /companions — поиск компаньонов\n"
-        "• /volunteers — волонтёрская помощь\n\n"
         "**Семья:**\n"
         "• /add_relative — привязать родственника\n\n"
         "**Другое:**\n"
@@ -788,10 +799,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "📋 Вот ваше главное меню:",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
+    await update.message.reply_text("📋 Вот ваше главное меню:", reply_markup=MAIN_MENU_KEYBOARD)
 
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info(), reply_markup=MAIN_MENU_KEYBOARD)
@@ -900,6 +908,9 @@ def build_application():
     application.add_handler(CommandHandler("achievements", achievements_cmd))
     application.add_handler(CommandHandler("admin_stats", admin_analytics_cmd))
 
+    # Голосовые сообщения
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
     # Определение города
     application.add_handler(
         MessageHandler(
@@ -944,6 +955,11 @@ def main() -> None:
         logger.info(f"✅ AI Service ready with model: {ai_service.model}")
     else:
         logger.warning("⚠️ AI Service disabled (add OPENROUTER_API_KEY)")
+
+    if voice_processor.available:
+        logger.info("✅ Voice processor ready (OpenRouter Whisper)")
+    else:
+        logger.warning("⚠️ Voice processor disabled (add OPENROUTER_API_KEY)")
 
     app = build_application()
     try:
