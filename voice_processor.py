@@ -1,7 +1,6 @@
 import os
 import logging
 import aiohttp
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +11,9 @@ class VoiceProcessor:
         self.available = bool(self.api_key)
 
         if self.available:
-            logger.info("✅ Voice processor ready (using OpenRouter)")
+            logger.info("✅ Voice processor ready (using OpenRouter Whisper)")
+        else:
+            logger.warning("⚠️ Voice processor disabled: OPENROUTER_API_KEY not set")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
         if not self.available:
@@ -42,6 +43,9 @@ class VoiceProcessor:
                         logger.error(f"Whisper API error: {response.status} - {error}")
                         return None
 
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error: {e}")
+            return None
         except Exception as e:
             logger.error(f"Voice processing error: {e}")
             return None
