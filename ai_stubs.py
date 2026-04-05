@@ -1,57 +1,55 @@
-from __future__ import annotations
-
+import os
+import logging
 from typing import Optional
 
-import httpx
+logger = logging.getLogger(__name__)
 
-from bot_config import get_settings
+# Попытка импортировать AI сервис
+try:
+    from ai_service import ai_service
+    AI_AVAILABLE = bool(os.environ.get("OPENROUTER_API_KEY"))
+except ImportError:
+    AI_AVAILABLE = False
+    logger.warning("AI service not available")
 
-
-async def generate_companion_reply(user_text: str, name: str | None = None) -> str:
-    """Асинхронная заглушка для AI-компаньона.
-
-    Если Deepseek не настроен в окружении, возвращаем простой эмпатичный ответ.
-    Если настроен — пробуем сделать HTTP-запрос к API (формат запроса зависит от конкретного провайдера,
-    поэтому здесь остаётся упрощённый пример).
-    """
-    settings = get_settings()
-    if not settings.deepseek_api_url or not settings.deepseek_api_key:
-        prefix = f"{name}, " if name else ""
-        return (
-            f"{prefix}я вас внимательно слушаю. 🌷\n\n"
-            "Сейчас у меня включён простой режим без настоящего искусственного интеллекта.\n"
-            "Но я всё равно постараюсь поддержать вас. Расскажите, что у вас на душе?"
-        )
-
-    prompt = (
-        "Ты добрый, терпеливый собеседник для пожилого человека.\n"
-        "Отвечай простым, тёплым языком, без сложных терминов.\n"
-        "Поддерживай, задавай мягкие уточняющие вопросы.\n\n"
-        f"Сообщение пользователя: {user_text}"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            # Примерный формат; его нужно будет адаптировать под реальный Deepseek API
-            response = await client.post(
-                settings.deepseek_api_url,
-                headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
-                json={"prompt": prompt, "max_tokens": 256},
+async def generate_companion_reply(message: str, name: str = "друг", user_id: int = 0) -> str:
+    """Генерация ответа компаньона через AI"""
+    
+    # Если AI доступен — используем его
+    if AI_AVAILABLE:
+        try:
+            return await ai_service.generate_response(
+                message=message,
+                user_id=user_id,
+                user_name=name
             )
-        response.raise_for_status()
-        data = response.json()
-        text: Optional[str] = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content")
-        ) or data.get("text")
-        if not text:
-            raise ValueError("empty response from AI")
-        return text.strip()
-    except Exception:
-        prefix = f"{name}, " if name else ""
-        return (
-            f"{prefix}кажется, у нас временные трудности со связью с умным помощником.\n"
-            "Но я рядом и готова просто поговорить с вами. ❤️"
-        )
+        except Exception as e:
+            logger.error(f"AI generation failed: {e}")
+            return _fallback_reply(message, name)
+    
+    # Иначе используем заглушку
+    return _fallback_reply(message, name)
 
+def _fallback_reply(message: str, name: str) -> str:
+    """Ответ-заглушка для MVP"""
+    message_lower = message.lower()
+    
+    if any(word in message_lower for word in ['привет', 'здравствуй', 'добрый день']):
+        return f"Здравствуйте, {name}! 🌷 Рада вас видеть! Как ваши дела?"
+    
+    if any(word in message_lower for word in ['как дела', 'как ты', 'дела как']):
+        return f"У меня всё отлично, {name}! Я учусь новому каждый день, чтобы лучше вам помогать. А как вы себя чувствуете?"
+    
+    if any(word in message_lower for word in ['спасибо', 'благодарю']):
+        return f"Пожалуйста, {name}! 😊 Всегда рада помочь. Обращайтесь, если что-то нужно!"
+    
+    if any(word in message_lower for word in ['погод', 'солнце', 'дождь']):
+        return f"О погоде, {name}, лучше всего спросить в команде /weather — я покажу точный прогноз для вашего города!"
+    
+    # Стандартный ответ
+    return (
+        f"Спасибо за ваше сообщение, {name}! 😊\n\n"
+        f"Я внимательно его прочитала. Если вам нужна помощь с напоминаниями, "
+        f"прогнозом погоды или просто хочется поговорить — я всегда здесь!\n\n"
+        f"Кстати, вы можете воспользоваться кнопками в меню для быстрого доступа к функциям."
+    )
