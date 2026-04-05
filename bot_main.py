@@ -3,18 +3,15 @@ from __future__ import annotations
 import os
 import logging
 import sys
-import json
 import sqlite3
 from enum import Enum, auto
-from typing import Final, Optional, Dict, List, Any
-from datetime import time, datetime, timedelta
-from io import BytesIO
+from typing import Final, Optional
+from datetime import time, datetime
 
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    Voice,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -43,141 +40,6 @@ from features_stub import (
     voice_interface_info,
     analytics_info_text,
 )
-
-# Настройка логирования
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
-
-# ==================== AI СЕРВИС ====================
-
-class AIService:
-    """Сервис для работы с AI через OpenRouter"""
-    
-    def __init__(self):
-        self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = os.environ.get("AI_MODEL", "google/gemini-2.0-flash-exp:free")
-        self.available = bool(self.api_key)
-        
-        if self.available:
-            logger.info(f"✅ AI Service initialized with model: {self.model}")
-        else:
-            logger.warning("⚠️ AI Service disabled: OPENROUTER_API_KEY not set")
-    
-    async def generate_response(
-        self, 
-        message: str, 
-        user_id: int,
-        user_name: str = "Пользователь"
-    ) -> str:
-        """Генерация ответа через AI"""
-        
-        if not self.available:
-            return self._fallback_response(message, user_name)
-        
-        # Получаем контекст из памяти
-        memory = await self.get_user_memory(user_id)
-        
-        # Формируем системный промпт
-        system_prompt = self._get_system_prompt(user_name, memory)
-        
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": message}
-                        ],
-                        "temperature": 0.7,
-                        "max_tokens": 500
-                    }
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data["choices"][0]["message"]["content"]
-                    else:
-                        logger.error(f"AI API error: {response.status}")
-                        return self._fallback_response(message, user_name)
-        except Exception as e:
-            logger.error(f"AI request failed: {e}")
-            return self._fallback_response(message, user_name)
-    
-    def _get_system_prompt(self, user_name: str, memory: str = "") -> str:
-        prompt = f"""Ты — заботливый бот-компаньон «Семья». Ты общаешься с {user_name}.
-
-Правила общения:
-1. Отвечай тепло, дружелюбно и заботливо
-2. Используй простые, понятные предложения
-3. Если нужно напомнить о здоровье — напомни
-4. Интересуйся самочувствием пользователя
-5. Не используй сложные технические термины
-6. Будь терпеливым и понимающим
-
-Твоя цель — поддерживать приятную беседу и помогать пользователю."""
-        
-        if memory:
-            prompt += f"\n\nИнформация о пользователе из памяти:\n{memory}"
-        
-        return prompt
-    
-    def _fallback_response(self, message: str, user_name: str) -> str:
-        """Ответ-заглушка при недоступности AI"""
-        message_lower = message.lower()
-        
-        if any(word in message_lower for word in ['привет', 'здравствуй']):
-            return f"Здравствуйте, {user_name}! 🌷 Рада вас видеть!"
-        
-        if any(word in message_lower for word in ['как дела', 'как ты']):
-            return f"У меня всё отлично, {user_name}! А как вы себя чувствуете?"
-        
-        if any(word in message_lower for word in ['спасибо', 'благодарю']):
-            return f"Пожалуйста, {user_name}! 😊 Всегда рада помочь."
-        
-        return (
-            f"Спасибо за ваше сообщение, {user_name}! 😊\n\n"
-            f"Если вам нужна помощь с напоминаниями, прогнозом погоды "
-            f"или просто хочется поговорить — я всегда здесь!"
-        )
-    
-    async def get_user_memory(self, user_id: int) -> str:
-        """Получение сохранённой информации о пользователе"""
-        try:
-            conn = sqlite3.connect('family_bot.db')
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, age, city, interests FROM users WHERE telegram_id = ?",
-                (user_id,)
-            )
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row and any(row):
-                facts = []
-                if row[0]: facts.append(f"Имя: {row[0]}")
-                if row[1]: facts.append(f"Возраст: {row[1]}")
-                if row[2]: facts.append(f"Город: {row[2]}")
-                if row[3]: facts.append(f"Интересы: {row[3]}")
-                return "\n".join(facts)
-        except Exception as e:
-            logger.error(f"Memory error: {e}")
-        return ""
-
-# Глобальный экземпляр AI сервиса
-ai_service = AIService()
-
-# ==================== ОСТАЛЬНЫЕ ИМПОРТЫ ====================
-
 from storage import (
     init_db,
     upsert_user,
@@ -188,6 +50,14 @@ from storage import (
     add_relative_link,
     get_relatives_for_senior,
 )
+from ai_service import ai_service
+
+# Настройка логирования
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 # ==================== КОНСТАНТЫ ====================
 
@@ -216,7 +86,7 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# ==================== ОБРАБОТЧИКИ КОМАНД ====================
+# ==================== ОНБОРДИНГ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
@@ -340,36 +210,173 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await handle_talk(update, context)
 
 async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Умный собеседник с AI"""
+    """Умный собеседник с AI и обработкой команд"""
     user = update.effective_user
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     user_message = (update.message.text or "").strip()
     
-    # Убираем эмодзи, если они есть в начале
+    # Убираем эмодзи меню
     if user_message and user_message[0] in ["💬", "📅", "👥", "🆘", "👨‍👩‍👧", "⚙️"]:
         user_message = user_message[1:].strip()
         if not user_message:
             await update.message.reply_text(
-                "Выберите, пожалуйста, действие из меню или просто напишите мне что-нибудь! 😊",
+                "Напишите мне что-нибудь, и мы поговорим! 😊",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
             return
 
     if user:
         log_activity(user.id, "talk")
+    
+    user_message_lower = user_message.lower()
+    
+    # 1. Погода
+    if any(word in user_message_lower for word in ['погод', 'прогноз', 'солнце', 'дождь', 'ветер', 'температура', 'градус']):
+        city = context.user_data.get("city")
+        if not city:
+            await update.message.reply_text(
+                "🌤️ Чтобы узнать погоду, скажите мне ваш город.\n"
+                "Например: «Я живу в Москве»",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            return
+        
+        thinking = await update.message.reply_text("🌤️ Узнаю погоду...")
+        summary = await get_weather_summary(city)
+        await thinking.delete()
+        
+        if summary:
+            await update.message.reply_text(
+                f"🌤️ Прогноз погоды для {city}:\n\n{summary}",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Не удалось получить прогноз. Попробуйте позже.",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+        return
+    
+    # 2. Время и дата
+    if any(word in user_message_lower for word in ['время', 'часы', 'который час', 'дата', 'сегодня', 'какой день', 'число']):
+        now = datetime.now()
+        await update.message.reply_text(
+            f"📅 Сегодня {now.strftime('%d.%m.%Y')}\n"
+            f"🕐 Сейчас {now.strftime('%H:%M')}",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+        return
+    
+    # 3. Приветствие
+    if any(word in user_message_lower for word in ['привет', 'здравствуй', 'доброе утро', 'добрый день', 'добрый вечер', 'здрасьте']):
+        greeting = (
+            f"Здравствуйте, {name}! 🌷\n\n"
+            f"Чем могу помочь сегодня?\n\n"
+            f"• 🌤️ Спросите «какая погода»\n"
+            f"• 💊 Напишите /add_meds для напоминаний\n"
+            f"• 💬 Просто поболтаем — напишите что-нибудь"
+        )
+        await update.message.reply_text(greeting, reply_markup=MAIN_MENU_KEYBOARD)
+        return
+    
+    # 4. Как дела
+    if any(word in user_message_lower for word in ['как дела', 'как ты', 'дела как', 'как поживаешь', 'как настроение']):
+        response = (
+            f"У меня всё отлично, {name}! 😊\n\n"
+            f"Я каждый день учусь новому, чтобы лучше вам помогать.\n"
+            f"А как вы себя чувствуете сегодня?"
+        )
+        await update.message.reply_text(response, reply_markup=MAIN_MENU_KEYBOARD)
+        return
+    
+    # 5. Помощь
+    if any(word in user_message_lower for word in ['помощь', 'help', 'что умеешь', 'команды', 'функции', 'возможности']):
+        help_text = (
+            f"🤖 **Что я умею, {name}:**\n\n"
+            f"• 🌤️ **Погода** — спросите «какая погода»\n"
+            f"• 💊 **Напоминания** — команда /add_meds\n"
+            f"• 💬 **Поговорить** — напишите что угодно\n"
+            f"• 👨‍👩‍👧 **Семья** — кнопка в меню\n"
+            f"• 🆘 **SOS** — экстренная помощь\n"
+            f"• 🕐 **Время** — спросите «который час»\n\n"
+            f"Я здесь, чтобы поддержать вас! 🌷"
+        )
+        await update.message.reply_text(help_text, reply_markup=MAIN_MENU_KEYBOARD, parse_mode="Markdown")
+        return
+    
+    # 6. Напоминания
+    if any(word in user_message_lower for word in ['напомни', 'напоминание', 'запомни', 'лекарств', 'таблетк', 'принять']):
+        await update.message.reply_text(
+            "💊 Чтобы добавить напоминание о лекарствах, используйте команду /add_meds\n\n"
+            "Я буду каждый день напоминать вам в выбранное время!",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+        return
+    
+    # 7. Спасибо
+    if any(word in user_message_lower for word in ['спасибо', 'благодарю', 'пасиб']):
+        await update.message.reply_text(
+            f"Пожалуйста, {name}! 😊 Всегда рада помочь. Обращайтесь, если что-то нужно!",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+        return
 
-    # Отправляем уведомление о начале генерации
+    # 8. AI ответ (только если ни одно условие не сработало)
     thinking_msg = await update.message.reply_text("🤔 Думаю над ответом...")
 
-    # Генерируем ответ через AI
-    reply = await ai_service.generate_response(
-        message=user_message,
-        user_id=user.id if user else 0,
-        user_name=name
-    )
+    try:
+        reply = await ai_service.generate_response(
+            message=user_message,
+            user_id=user.id if user else 0,
+            user_name=name
+        )
+        await thinking_msg.delete()
+        await update.message.reply_text(reply, reply_markup=MAIN_MENU_KEYBOARD)
+    except Exception as e:
+        await thinking_msg.delete()
+        logger.error(f"AI error: {e}")
+        await update.message.reply_text(
+            f"Извините, {name}, у меня небольшие технические трудности. Попробуйте ещё раз! 😊",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
 
-    await thinking_msg.delete()
-    await update.message.reply_text(reply, reply_markup=MAIN_MENU_KEYBOARD)
+async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка сообщений о городе"""
+    user_message = (update.message.text or "").strip().lower()
+    user = update.effective_user
+    
+    city_keywords = ['живу в', 'город', 'в городе', 'я из', 'проживаю в', 'город мой']
+    city = None
+    
+    for keyword in city_keywords:
+        if keyword in user_message:
+            parts = user_message.split(keyword, 1)
+            if len(parts) > 1:
+                city = parts[1].strip().split()[0]
+                city = city.replace(',', '').replace('.', '').replace('!', '').replace('?', '')
+                break
+    
+    if city and len(city) > 1:
+        context.user_data["city"] = city
+        upsert_user(
+            telegram_id=user.id if user else 0,
+            role=context.user_data.get("role", "senior"),
+            name=context.user_data.get("name"),
+            age=context.user_data.get("age"),
+            city=city,
+            interests=context.user_data.get("interests"),
+        )
+        await update.message.reply_text(
+            f"✅ Запомнила! Ваш город: {city}\n\n"
+            f"Теперь вы можете спрашивать меня о погоде! 🌤️",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+    else:
+        await update.message.reply_text(
+            "🌆 Напишите, пожалуйста, ваш город.\n"
+            "Например: «Я живу в Санкт-Петербурге»",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
 
 async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -378,7 +385,7 @@ async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if not reminders:
         await update.message.reply_text(
-            "У вас пока нет напоминаний.\n\n"
+            "📋 У вас пока нет напоминаний.\n\n"
             "Отправьте команду /add_meds, чтобы добавить напоминание о лекарствах.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
@@ -417,7 +424,7 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     chat_id=rel_id,
                     text=(
                         "🚨 ВНИМАНИЕ! 🚨\n\n"
-                        f"Ваш близкий (Telegram ID {user.id}) нажал кнопку SOS.\n"
+                        f"Ваш близкий человек нажал кнопку SOS.\n"
                         "Пожалуйста, свяжитесь с ним как можно скорее!"
                     ),
                 )
@@ -451,23 +458,6 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await handle_talk(update, context)
-
-# ==================== ГОЛОСОВЫЕ СООБЩЕНИЯ ====================
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка голосовых сообщений"""
-    user = update.effective_user
-    voice: Voice = update.message.voice
-    
-    if not voice:
-        return
-
-    await update.message.reply_text(
-        "🎤 Получил ваше голосовое сообщение!\n\n"
-        "К сожалению, распознавание голоса пока в разработке. "
-        "Пожалуйста, напишите текстом или используйте кнопки меню. 😊",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
 
 # ==================== НАПОМИНАНИЯ О ЛЕКАРСТВАХ ====================
 
@@ -585,7 +575,7 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     if not context.args:
         await update.message.reply_text(
-            "👨‍👩‍👧 Использование: /add_relative <Telegram ID пожилого пользователя>\n"
+            "👨‍👩‍👧 Использование: /add_relative <Telegram ID>\n"
             "Пример: /add_relative 123456789",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
@@ -603,8 +593,7 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     add_relative_link(senior_telegram_id=senior_id, relative_telegram_id=user.id)
     await update.message.reply_text(
-        f"✅ Готово! Вы связаны с пользователем {senior_id}.\n"
-        "Теперь вы будете получать уведомления при нажатии SOS.",
+        f"✅ Готово! Вы связаны с пользователем {senior_id}.",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
 
@@ -633,7 +622,38 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await update.message.reply_text(
-        f"🌤️ Доброе утро, {name}!\n\n{summary}",
+        f"🌤️ Прогноз погоды для {city}:\n\n{summary}",
+        reply_markup=MAIN_MENU_KEYBOARD,
+    )
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "🤖 **Бот-компаньон «Семья»**\n\n"
+        "**Основные команды:**\n"
+        "• /start — начать общение\n"
+        "• /menu — показать главное меню\n"
+        "• /help — эта справка\n\n"
+        "**Погода:**\n"
+        "• /weather — прогноз погоды\n"
+        "• «Какая погода?» — спросите в чате\n\n"
+        "**Здоровье:**\n"
+        "• /add_meds — добавить напоминание о лекарствах\n"
+        "• /enable_checkin — ежедневный опрос\n\n"
+        "**Общение:**\n"
+        "• /companions — поиск компаньонов\n"
+        "• /volunteers — волонтёрская помощь\n\n"
+        "**Семья:**\n"
+        "• /add_relative — привязать родственника\n\n"
+        "**Другое:**\n"
+        "• «Который час?» — текущее время\n"
+        "• «Привет» — начать диалог",
+        reply_markup=MAIN_MENU_KEYBOARD,
+        parse_mode="Markdown",
+    )
+
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "📋 Вот ваше главное меню:",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
 
@@ -663,38 +683,6 @@ async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def admin_analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(analytics_info_text(), reply_markup=MAIN_MENU_KEYBOARD)
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "🤖 **Бот-компаньон «Семья»**\n\n"
-        "**Основные команды:**\n"
-        "• /start — начать общение\n"
-        "• /menu — показать главное меню\n"
-        "• /help — эта справка\n\n"
-        "**Здоровье:**\n"
-        "• /add_meds — добавить напоминание о лекарствах\n"
-        "• /weather — прогноз погоды\n"
-        "• /enable_checkin — ежедневный опрос\n\n"
-        "**Общение:**\n"
-        "• /companions — поиск компаньонов\n"
-        "• /volunteers — волонтёрская помощь\n"
-        "• /games — игры\n"
-        "• /nostalgia — ностальгия\n"
-        "• /courses — курсы\n\n"
-        "**Семья:**\n"
-        "• /add_relative — привязать родственника\n"
-        "• /voice_help — голосовые сообщения\n\n"
-        "**Статистика:**\n"
-        "• /admin_stats — аналитика (для админов)",
-        reply_markup=MAIN_MENU_KEYBOARD,
-        parse_mode="Markdown",
-    )
-
-async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "📋 Вот ваше главное меню:",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
 
 # ==================== ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ====================
 
@@ -776,8 +764,13 @@ def build_application():
     application.add_handler(CommandHandler("achievements", achievements_cmd))
     application.add_handler(CommandHandler("admin_stats", admin_analytics_cmd))
 
-    # Голосовые сообщения
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    # Определение города
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r'(живу в|город|в городе|я из|проживаю в|город мой)'), 
+            handle_set_city
+        )
+    )
 
     # Главное меню
     application.add_handler(
@@ -811,11 +804,10 @@ def main() -> None:
     else:
         logger.warning("No proxy configured")
 
-    # Выводим статус AI
     if ai_service.available:
-        logger.info("✅ AI Service is ready")
+        logger.info(f"✅ AI Service ready with model: {ai_service.model}")
     else:
-        logger.warning("⚠️ AI Service disabled (add OPENROUTER_API_KEY to enable)")
+        logger.warning("⚠️ AI Service disabled (add OPENROUTER_API_KEY)")
 
     app = build_application()
     try:
@@ -831,6 +823,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-def get_application():
-    return build_application()
