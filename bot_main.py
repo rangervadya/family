@@ -831,3 +831,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+def get_application():
+    return build_application()
