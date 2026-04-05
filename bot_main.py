@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import re
 import logging
 import sys
 import sqlite3
+import aiohttp
+import asyncio
 from enum import Enum, auto
 from typing import Final, Optional
 from datetime import time, datetime
@@ -26,7 +29,6 @@ from telegram.request import HTTPXRequest
 from telegram.error import NetworkError, TimedOut
 
 from bot_config import get_settings
-from weather import get_weather_summary
 from features_stub import (
     social_events_overview,
     social_companions_info,
@@ -85,6 +87,102 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+# ==================== ПОГОДА ====================
+
+async def get_weather_async(city: str) -> str:
+    """Получение погоды через OpenWeatherMap"""
+    
+    api_key = os.environ.get("OPENWEATHER_API_KEY", "")
+    if not api_key:
+        return None
+    
+    # Нормализуем название города
+    city_normalized = city.strip().lower()
+    city_normalized = city_normalized.replace("ё", "е")
+    
+    # Список популярных городов на русском и английском
+    city_map = {
+        "москва": "Moscow",
+        "санкт-петербург": "Saint Petersburg",
+        "новосибирск": "Novosibirsk",
+        "екатеринбург": "Yekaterinburg",
+        "казань": "Kazan",
+        "нижний новгород": "Nizhny Novgorod",
+        "краснодар": "Krasnodar",
+        "сочи": "Sochi",
+        "ростов-на-дону": "Rostov-on-Don",
+        "самара": "Samara",
+        "уфа": "Ufa",
+        "омск": "Omsk",
+        "челябинск": "Chelyabinsk",
+        "воронеж": "Voronezh",
+        "пермь": "Perm",
+        "волгоград": "Volgograd",
+    }
+    
+    variants = [city]
+    if city_normalized in city_map:
+        variants.append(city_map[city_normalized])
+    
+    for try_city in variants:
+        try:
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={try_city}&appid={api_key}&units=metric&lang=ru"
+            
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=timeout) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        temp = round(data['main']['temp'])
+                        feels_like = round(data['main']['feels_like'])
+                        humidity = data['main']['humidity']
+                        wind_speed = data['wind']['speed']
+                        description = data['weather'][0]['description']
+                        city_name = data['name']
+                        
+                        # Эмодзи для погоды
+                        weather_emoji = {
+                            "ясно": "☀️",
+                            "солнечно": "☀️",
+                            "облачно": "☁️",
+                            "пасмурно": "☁️",
+                            "дождь": "🌧️",
+                            "ливень": "🌧️",
+                            "снег": "❄️",
+                            "метель": "❄️",
+                            "гроза": "⛈️",
+                            "туман": "🌫️",
+                            "ветер": "💨"
+                        }
+                        
+                        emoji = "🌡️"
+                        for key, val in weather_emoji.items():
+                            if key in description.lower():
+                                emoji = val
+                                break
+                        
+                        return (
+                            f"{emoji} **Погода в {city_name}**\n\n"
+                            f"🌡️ Температура: **{temp}°C**\n"
+                            f"🤔 Ощущается как: **{feels_like}°C**\n"
+                            f"💧 Влажность: **{humidity}%**\n"
+                            f"💨 Ветер: **{wind_speed} м/с**\n"
+                            f"📖 Описание: **{description.capitalize()}**"
+                        )
+                    elif response.status == 404:
+                        continue
+                    else:
+                        continue
+                        
+        except asyncio.TimeoutError:
+            continue
+        except Exception as e:
+            logger.error(f"Weather error for {try_city}: {e}")
+            continue
+    
+    return None
 
 # ==================== ОНБОРДИНГ ====================
 
@@ -233,26 +331,38 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # 1. Погода
     if any(word in user_message_lower for word in ['погод', 'прогноз', 'солнце', 'дождь', 'ветер', 'температура', 'градус']):
         city = context.user_data.get("city")
+        
+        # Если в сообщении есть название города
+        words = user_message.split()
+        for word in words:
+            if word not in ['погода', 'какая', 'прогноз', 'покажи', 'узнай']:
+                if len(word) > 2:
+                    city = word
+                    break
+        
         if not city:
             await update.message.reply_text(
-                "🌤️ Чтобы узнать погоду, скажите мне ваш город.\n"
-                "Например: «Я живу в Москве»",
+                "🌤️ Чтобы узнать погоду, скажите мне ваш город.\n\n"
+                "Например:\n"
+                "• «Я живу в Москве»\n"
+                "• «Погода в Санкт-Петербурге»\n"
+                "• /weather Казань",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
             return
         
-        thinking = await update.message.reply_text("🌤️ Узнаю погоду...")
-        summary = await get_weather_summary(city)
-        await thinking.delete()
+        loading_msg = await update.message.reply_text("🌤️ Узнаю погоду...")
+        weather_info = await get_weather_async(city)
+        await loading_msg.delete()
         
-        if summary:
-            await update.message.reply_text(
-                f"🌤️ Прогноз погоды для {city}:\n\n{summary}",
-                reply_markup=MAIN_MENU_KEYBOARD,
-            )
+        if weather_info:
+            await update.message.reply_text(weather_info, parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD)
         else:
             await update.message.reply_text(
-                "❌ Не удалось получить прогноз. Попробуйте позже.",
+                f"😔 Не удалось найти погоду для города «{city}».\n\n"
+                f"Проверьте название и попробуйте ещё раз.\n"
+                f"Например: `/weather Москва`",
+                parse_mode="Markdown",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
         return
@@ -268,7 +378,7 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     
     # 3. Приветствие
-    if any(word in user_message_lower for word in ['привет', 'здравствуй', 'доброе утро', 'добрый день', 'добрый вечер', 'здрасьте']):
+    if any(word in user_message_lower for word in ['привет', 'здравствуй', 'доброе утро', 'добрый день', 'добрый вечер', 'здрасьте', 'здравствуйте']):
         greeting = (
             f"Здравствуйте, {name}! 🌷\n\n"
             f"Чем могу помочь сегодня?\n\n"
@@ -280,7 +390,7 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     
     # 4. Как дела
-    if any(word in user_message_lower for word in ['как дела', 'как ты', 'дела как', 'как поживаешь', 'как настроение']):
+    if any(word in user_message_lower for word in ['как дела', 'как ты', 'дела как', 'как поживаешь', 'как настроение', 'как жизнь']):
         response = (
             f"У меня всё отлично, {name}! 😊\n\n"
             f"Я каждый день учусь новому, чтобы лучше вам помогать.\n"
@@ -290,15 +400,16 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     
     # 5. Помощь
-    if any(word in user_message_lower for word in ['помощь', 'help', 'что умеешь', 'команды', 'функции', 'возможности']):
+    if any(word in user_message_lower for word in ['помощь', 'help', 'что умеешь', 'команды', 'функции', 'возможности', 'список команд']):
         help_text = (
             f"🤖 **Что я умею, {name}:**\n\n"
-            f"• 🌤️ **Погода** — спросите «какая погода»\n"
+            f"• 🌤️ **Погода** — спросите «какая погода» или «погода в Москве»\n"
             f"• 💊 **Напоминания** — команда /add_meds\n"
             f"• 💬 **Поговорить** — напишите что угодно\n"
             f"• 👨‍👩‍👧 **Семья** — кнопка в меню\n"
             f"• 🆘 **SOS** — экстренная помощь\n"
-            f"• 🕐 **Время** — спросите «который час»\n\n"
+            f"• 🕐 **Время** — спросите «который час»\n"
+            f"• 🌆 **Город** — скажите «я живу в Москве»\n\n"
             f"Я здесь, чтобы поддержать вас! 🌷"
         )
         await update.message.reply_text(help_text, reply_markup=MAIN_MENU_KEYBOARD, parse_mode="Markdown")
@@ -342,19 +453,36 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка сообщений о городе"""
-    user_message = (update.message.text or "").strip().lower()
+    user_message = (update.message.text or "").strip()
     user = update.effective_user
     
-    city_keywords = ['живу в', 'город', 'в городе', 'я из', 'проживаю в', 'город мой']
+    # Паттерны для извлечения города
+    patterns = [
+        r'я живу в ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+        r'я из ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+        r'мой город ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+        r'город ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+        r'живу в ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+        r'погода в ([а-яА-ЯёЁa-zA-Z\s\-]+)',
+    ]
+    
     city = None
     
-    for keyword in city_keywords:
-        if keyword in user_message:
-            parts = user_message.split(keyword, 1)
-            if len(parts) > 1:
-                city = parts[1].strip().split()[0]
-                city = city.replace(',', '').replace('.', '').replace('!', '').replace('?', '')
-                break
+    for pattern in patterns:
+        match = re.search(pattern, user_message.lower())
+        if match:
+            city = match.group(1).strip()
+            # Делаем первую букву заглавной
+            city = city[0].upper() + city[1:] if city else None
+            break
+    
+    # Если город не найден по паттерну
+    if not city and len(user_message) < 30:
+        # Исключаем команды и общие фразы
+        skip_words = ['привет', 'погода', 'спасибо', 'помощь', 'как', 'дела']
+        if user_message.lower() not in skip_words:
+            city = user_message.strip()
+            city = city[0].upper() + city[1:] if city else None
     
     if city and len(city) > 1:
         context.user_data["city"] = city
@@ -367,16 +495,14 @@ async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             interests=context.user_data.get("interests"),
         )
         await update.message.reply_text(
-            f"✅ Запомнила! Ваш город: {city}\n\n"
-            f"Теперь вы можете спрашивать меня о погоде! 🌤️",
+            f"✅ Запомнила! Ваш город: **{city}**\n\n"
+            f"🌤️ Теперь вы можете узнать погоду командой /weather",
+            parse_mode="Markdown",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
     else:
-        await update.message.reply_text(
-            "🌆 Напишите, пожалуйста, ваш город.\n"
-            "Например: «Я живу в Санкт-Петербурге»",
-            reply_markup=MAIN_MENU_KEYBOARD,
-        )
+        # Не отвечаем на каждое сообщение, чтобы не спамить
+        pass
 
 async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -598,33 +724,43 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /weather - получить погоду"""
     user = update.effective_user
     name = context.user_data.get("name") or (user.first_name if user else "друг")
+    
     city = context.user_data.get("city")
-
+    
+    # Если город указан в команде
+    if update.message.text:
+        text = update.message.text.replace("/weather", "").strip()
+        if text:
+            city = text
+    
     if not city:
         await update.message.reply_text(
-            f"{name}, я пока не знаю ваш город.\n"
-            "Напишите мне: «Я живу в <город>», и я запомню.",
+            f"{name}, я не знаю ваш город.\n\n"
+            f"🌆 Напишите «Я живу в Москве» или используйте команду:\n"
+            f"`/weather Москва`\n\n"
+            f"Я запомню ваш город и буду показывать погоду!",
+            parse_mode="Markdown",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
-
-    thinking = await update.message.reply_text("🌤️ Узнаю погоду...")
-    summary = await get_weather_summary(city)
-    await thinking.delete()
-
-    if not summary:
+    
+    loading_msg = await update.message.reply_text("🌤️ Узнаю погоду...")
+    weather_info = await get_weather_async(city)
+    await loading_msg.delete()
+    
+    if weather_info:
+        await update.message.reply_text(weather_info, parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD)
+    else:
         await update.message.reply_text(
-            "❌ Не получилось получить прогноз. Попробуйте позже.",
+            f"😔 {name}, не удалось найти погоду для города «{city}».\n\n"
+            f"Проверьте название и попробуйте ещё раз.\n"
+            f"Например: `/weather Москва`",
+            parse_mode="Markdown",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
-        return
-
-    await update.message.reply_text(
-        f"🌤️ Прогноз погоды для {city}:\n\n{summary}",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -767,7 +903,7 @@ def build_application():
     # Определение города
     application.add_handler(
         MessageHandler(
-            filters.Regex(r'(живу в|город|в городе|я из|проживаю в|город мой)'), 
+            filters.Regex(r'(живу в|город|в городе|я из|проживаю в|город мой|погода в)'), 
             handle_set_city
         )
     )
