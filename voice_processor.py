@@ -11,13 +11,12 @@ class VoiceProcessor:
         self.available = bool(self.api_key)
         
         if self.available:
-            logger.info("✅ Voice processor ready (using OpenRouter Whisper)")
+            logger.info("✅ Voice processor ready (OpenRouter Whisper)")
         else:
             logger.warning("⚠️ Voice processor disabled. Add OPENROUTER_API_KEY")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
         if not self.available:
-            logger.warning("Voice recognition not available")
             return None
 
         logger.info(f"🎤 Processing {len(file_bytes)} bytes")
@@ -38,10 +37,9 @@ class VoiceProcessor:
                         result = await response.json()
                         text = result.get("text", "")
                         if text:
-                            logger.info(f"🎤 Recognized: {text[:50]}...")
+                            logger.info(f"🎤 Recognized: {text[:50]}")
                             return text
                     else:
-                        error = await response.text()
                         logger.error(f"Whisper API error: {response.status}")
                         return None
         except Exception as e:
