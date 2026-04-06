@@ -434,15 +434,31 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     try:
-        logger.info(f"🎤 Processing voice message from user {user.id if user else 'unknown'}")
+        logger.info("=" * 50)
+        logger.info("🎤 START VOICE PROCESSING")
+        logger.info(f"🎤 User ID: {user.id if user else 'unknown'}")
         logger.info(f"🎤 Voice duration: {voice.duration} seconds")
+        logger.info(f"🎤 Voice file_id: {voice.file_id}")
         
         # Скачиваем голосовое сообщение
+        logger.info("🎤 Downloading voice file...")
         file = await context.bot.get_file(voice.file_id)
-        logger.info(f"🎤 File downloaded: {file.file_id}")
+        logger.info(f"🎤 File path: {file.file_path}")
         
         audio_bytes = await file.download_as_bytearray()
-        logger.info(f"🎤 Audio bytes size: {len(audio_bytes)} bytes")
+        logger.info(f"🎤 Downloaded {len(audio_bytes)} bytes")
+        
+        # Проверяем, есть ли ключ
+        from voice_processor import voice_processor
+        logger.info(f"🎤 Voice processor available: {voice_processor.available}")
+        
+        if not voice_processor.available:
+            await processing_msg.edit_text(
+                "❌ Голосовой помощник временно недоступен.\n\n"
+                "Пожалуйста, напишите текстом.",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            return
         
         # Распознаём текст
         logger.info("🎤 Calling voice_processor.process_voice()...")
@@ -456,6 +472,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             
             # Генерируем ответ через AI
+            from ai_service import ai_service
             reply = await ai_service.generate_response(
                 message=recognized_text,
                 user_id=user.id if user else 0,
@@ -470,19 +487,23 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             await processing_msg.edit_text(
                 "😔 Не удалось распознать голосовое сообщение.\n\n"
-                "Попробуйте:\n"
-                "• Говорить чётче и медленнее\n"
-                "• Отправить сообщение короче (5-10 секунд)\n"
-                "• Или просто напишите текстом",
+                "Возможные причины:\n"
+                "• Говорите чётче и медленнее\n"
+                "• Слишком много фонового шума\n"
+                "• Сообщение слишком короткое или длинное\n\n"
+                "Попробуйте ещё раз или напишите текстом!",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
             
     except Exception as e:
-        logger.error(f"Voice handling error: {e}", exc_info=True)
+        logger.error(f"🎤 Voice handling error: {e}", exc_info=True)
         await processing_msg.edit_text(
-            f"❌ Произошла ошибка: {str(e)[:100]}\n\nПопробуйте ещё раз или напишите текстом.",
+            f"❌ Ошибка: {str(e)[:100]}\n\nПопробуйте ещё раз или напишите текстом.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
+    
+    logger.info("🎤 END VOICE PROCESSING")
+    logger.info("=" * 50)
 
 async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка сообщений о городе"""
