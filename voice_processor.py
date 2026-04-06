@@ -9,24 +9,20 @@ class VoiceProcessor:
     def __init__(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.available = bool(self.api_key)
-        
         if self.available:
-            logger.info("✅ Voice processor ready (OpenRouter Whisper)")
+            logger.info("✅ Voice processor ready")
         else:
-            logger.warning("⚠️ Voice processor disabled. Add OPENROUTER_API_KEY")
+            logger.warning("⚠️ Voice processor disabled")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
         if not self.available:
             return None
-
         logger.info(f"Processing {len(file_bytes)} bytes")
-        
         try:
             async with aiohttp.ClientSession() as session:
                 form_data = aiohttp.FormData()
                 form_data.add_field('file', file_bytes, filename='audio.ogg', content_type='audio/ogg')
                 form_data.add_field('model', 'openai/whisper-large-v3-turbo')
-                
                 async with session.post(
                     "https://openrouter.ai/api/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
@@ -40,10 +36,10 @@ class VoiceProcessor:
                             logger.info(f"Recognized: {text[:50]}")
                             return text
                     else:
-                        logger.error(f"Whisper API error: {response.status}")
+                        logger.error(f"API error: {response.status}")
                         return None
         except Exception as e:
-            logger.error(f"Voice error: {e}")
+            logger.error(f"Error: {e}")
             return None
 
 voice_processor = VoiceProcessor()
