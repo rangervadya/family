@@ -435,14 +435,21 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         logger.info(f"🎤 Voice from user {user.id if user else 'unknown'}, duration: {voice.duration}s")
         
-        # Скачиваем файл
         file = await context.bot.get_file(voice.file_id)
         audio_bytes = await file.download_as_bytearray()
         logger.info(f"🎤 Downloaded {len(audio_bytes)} bytes")
         
-        # Распознаём
         from voice_processor import voice_processor
+        
+        if not voice_processor.available:
+            await processing_msg.edit_text(
+                "❌ Голосовой помощник недоступен.\n\nПожалуйста, напишите текстом.",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            return
+        
         recognized_text = await voice_processor.process_voice(bytes(audio_bytes))
+        logger.info(f"🎤 Recognized: '{recognized_text}'")
         
         if recognized_text:
             await processing_msg.edit_text(
@@ -450,6 +457,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 parse_mode="Markdown"
             )
             
+            from ai_service import ai_service
             reply = await ai_service.generate_response(
                 message=recognized_text,
                 user_id=user.id if user else 0,
