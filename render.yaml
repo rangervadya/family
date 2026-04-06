@@ -15,14 +15,3 @@ services:
         value: "3.12.8"
 
 
-services:
-  - type: web
-    name: family-bot
-    runtime: python
-    buildCommand: |
-      apt-get update && apt-get install -y ffmpeg
-      pip install -r requirements.txt
-    startCommand: python bot_main.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
