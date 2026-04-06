@@ -29,7 +29,6 @@ class VoiceProcessor:
             
             # Распознаём через Google Speech Recognition
             with sr.AudioFile(wav_io) as source:
-                # Убираем фоновый шум
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio_data = self.recognizer.record(source)
             
@@ -49,7 +48,6 @@ class VoiceProcessor:
             except sr.UnknownValueError:
                 logger.warning("Could not recognize English speech")
             
-            logger.error("Speech recognition failed - no text detected")
             return None
             
         except Exception as e:
