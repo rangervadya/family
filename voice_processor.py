@@ -1,57 +1,51 @@
 import os
 import logging
-import io
-import speech_recognition as sr
-from pydub import AudioSegment
+import aiohttp
+import json
 
 logger = logging.getLogger(__name__)
 
 class VoiceProcessor:
     def __init__(self):
-        self.recognizer = sr.Recognizer()
-        self.available = True
-        logger.info("✅ Voice processor ready (Google Speech Recognition - FREE)")
+        self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        self.available = bool(self.api_key)
+        
+        if self.available:
+            logger.info("✅ Voice processor ready (using OpenRouter Whisper)")
+        else:
+            logger.warning("⚠️ Voice processor disabled. Add OPENROUTER_API_KEY")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
-        logger.info(f"🎤 Processing voice message: {len(file_bytes)} bytes")
+        if not self.available:
+            logger.warning("Voice recognition not available")
+            return None
+
+        logger.info(f"🎤 Processing {len(file_bytes)} bytes")
         
         try:
-            # Конвертируем OGG в WAV
-            audio = AudioSegment.from_ogg(io.BytesIO(file_bytes))
-            
-            # Конвертируем в нужный формат (моно, 16kHz)
-            audio = audio.set_channels(1).set_frame_rate(16000)
-            
-            # Экспортируем в WAV
-            wav_io = io.BytesIO()
-            audio.export(wav_io, format="wav")
-            wav_io.seek(0)
-            
-            # Распознаём через Google Speech Recognition
-            with sr.AudioFile(wav_io) as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio_data = self.recognizer.record(source)
-            
-            # Пробуем распознать русскую речь
-            try:
-                text = self.recognizer.recognize_google(audio_data, language="ru-RU")
-                logger.info(f"🎤 Recognized (RU): {text}")
-                return text
-            except sr.UnknownValueError:
-                logger.warning("Could not recognize Russian speech")
-            
-            # Пробуем английский
-            try:
-                text = self.recognizer.recognize_google(audio_data, language="en-US")
-                logger.info(f"🎤 Recognized (EN): {text}")
-                return text
-            except sr.UnknownValueError:
-                logger.warning("Could not recognize English speech")
-            
-            return None
-            
+            async with aiohttp.ClientSession() as session:
+                form_data = aiohttp.FormData()
+                form_data.add_field('file', file_bytes, filename='audio.ogg', content_type='audio/ogg')
+                form_data.add_field('model', 'openai/whisper-large-v3-turbo')
+                
+                async with session.post(
+                    "https://openrouter.ai/api/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    data=form_data,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        text = result.get("text", "")
+                        if text:
+                            logger.info(f"🎤 Recognized: {text[:50]}...")
+                            return text
+                    else:
+                        error = await response.text()
+                        logger.error(f"Whisper API error: {response.status}")
+                        return None
         except Exception as e:
-            logger.error(f"Voice processing error: {e}", exc_info=True)
+            logger.error(f"Voice error: {e}")
             return None
 
 voice_processor = VoiceProcessor()
