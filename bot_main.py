@@ -433,11 +433,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     try:
-        logger.info(f"🎤 Voice from user {user.id if user else 'unknown'}, duration: {voice.duration}s")
+        logger.info(f"Voice from user, duration: {voice.duration}s")
         
         file = await context.bot.get_file(voice.file_id)
         audio_bytes = await file.download_as_bytearray()
-        logger.info(f"🎤 Downloaded {len(audio_bytes)} bytes")
+        logger.info(f"Downloaded {len(audio_bytes)} bytes")
         
         from voice_processor import voice_processor
         
@@ -449,7 +449,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         
         recognized_text = await voice_processor.process_voice(bytes(audio_bytes))
-        logger.info(f"🎤 Recognized: '{recognized_text}'")
+        logger.info(f"Recognized: '{recognized_text}'")
         
         if recognized_text:
             await processing_msg.edit_text(
