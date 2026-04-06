@@ -2,15 +2,17 @@ import os
 import re
 import logging
 import aiohttp
+import io
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from pydub import AudioSegment
+import speech_recognition as sr
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 WEATHER_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 
 # Клавиатура
@@ -59,26 +61,50 @@ async def get_weather(city: str) -> str:
         logger.error(f"Weather error: {e}")
     return None
 
+# ==================== РАСПОЗНАВАНИЕ ГОЛОСА (БЕСПЛАТНО) ====================
+
+def recognize_voice(audio_bytes: bytes) -> str:
+    """Распознаёт голос через Google Speech Recognition (бесплатно)"""
+    try:
+        # Конвертируем OGG в WAV
+        audio = AudioSegment.from_ogg(io.BytesIO(audio_bytes))
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        # Распознаём
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = recognizer.record(source)
+        
+        # Пробуем русский
+        try:
+            text = recognizer.recognize_google(audio_data, language="ru-RU")
+            logger.info(f"Recognized (RU): {text}")
+            return text.lower()
+        except:
+            pass
+        
+        # Пробуем английский
+        try:
+            text = recognizer.recognize_google(audio_data, language="en-US")
+            logger.info(f"Recognized (EN): {text}")
+            return text.lower()
+        except:
+            pass
+        
+        return None
+    except Exception as e:
+        logger.error(f"Voice recognition error: {e}")
+        return None
+
 # ==================== AI ОТВЕТ ====================
 
 async def get_ai_response(message: str) -> str:
-    if not OPENROUTER_KEY:
-        return None
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"},
-                json={"model": "qwen/qwen3.6-plus-preview:free", "messages": [{"role": "user", "content": message}], "max_tokens": 300},
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.error(f"AI error: {e}")
-    return None
+    return None  # AI отключён для простоты, можно включить позже
 
 # ==================== ОБРАБОТЧИК ТЕКСТА ====================
 
@@ -132,102 +158,96 @@ async def handle_text(update: Update, context):
             await update.message.reply_text(f"✅ Запомнила! Ваш город: {city}\n\n🌤️ Теперь спрашивайте погоду!", reply_markup=menu)
             return
     
-    # AI ответ
-    thinking = await update.message.reply_text("🤔 Думаю...")
-    reply = await get_ai_response(text)
-    if reply:
-        await thinking.delete()
-        await update.message.reply_text(reply, reply_markup=menu)
-    else:
-        await thinking.edit_text("😊 Я вас понял! Если хотите узнать погоду — скажите «погода». Чтобы узнать время — «время». Просто поболтаем?", reply_markup=menu)
+    # Стандартный ответ
+    await update.message.reply_text(
+        f"😊 Спасибо за сообщение!\n\n"
+        f"Я могу:\n"
+        f"• 🌤️ Показать погоду — скажите «погода»\n"
+        f"• 🕐 Показать время — скажите «время»\n"
+        f"• 🎤 Распознать голос — отправьте голосовое сообщение\n\n"
+        f"А ещё я запоминаю ваш город! Скажите «Я живу в Москве»",
+        reply_markup=menu
+    )
 
-# ==================== ОБРАБОТЧИК ГОЛОСА ====================
+# ==================== ОБРАБОТЧИК ГОЛОСА (С РАСПОЗНАВАНИЕМ) ====================
 
 async def handle_voice(update: Update, context):
     user_id = update.effective_user.id
     processing = await update.message.reply_text("🎤 Распознаю голосовое сообщение...")
     
     try:
+        # Скачиваем голосовое
         file = await context.bot.get_file(update.message.voice.file_id)
-        audio = await file.download_as_bytearray()
+        audio_bytes = await file.download_as_bytearray()
         
-        async with aiohttp.ClientSession() as session:
-            form = aiohttp.FormData()
-            form.add_field('file', audio, filename='audio.ogg', content_type='audio/ogg')
-            form.add_field('model', 'openai/whisper-large-v3-turbo')
-            async with session.post(
-                "https://openrouter.ai/api/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    recognized = result.get("text", "").strip().lower()
-                    logger.info(f"Recognized: {recognized}")
-                    
-                    if not recognized:
-                        await processing.edit_text("😔 Не удалось распознать голос. Попробуйте говорить чётче.", reply_markup=menu)
-                        return
-                    
-                    await processing.edit_text(f"📝 Вы сказали: {recognized}\n\n🤔 Обрабатываю...")
-                    
-                    # ==== ПРОВЕРКА КОМАНД ====
-                    
-                    # 1. Погода
-                    if any(w in recognized for w in ['погод', 'прогноз', 'дождь', 'ветер', 'температура', 'солнце']):
-                        city = user_city.get(user_id)
-                        if not city:
-                            await processing.edit_text("🌤️ Сначала скажите ваш город: «Я живу в Москве»", reply_markup=menu)
-                            return
-                        
-                        weather = await get_weather(city)
-                        if weather:
-                            await processing.delete()
-                            await update.message.reply_text(weather, parse_mode="Markdown", reply_markup=menu)
-                        else:
-                            await processing.edit_text(f"😔 Не удалось найти погоду для {city}", reply_markup=menu)
-                        return
-                    
-                    # 2. Время
-                    if any(w in recognized for w in ['время', 'часы', 'который час', 'дата', 'сегодня']):
-                        now = datetime.now()
-                        await processing.delete()
-                        await update.message.reply_text(f"📅 {now.strftime('%d.%m.%Y')}\n🕐 {now.strftime('%H:%M')}", reply_markup=menu)
-                        return
-                    
-                    # 3. Приветствие
-                    if any(w in recognized for w in ['привет', 'здравствуй', 'доброе утро', 'добрый день']):
-                        await processing.delete()
-                        await update.message.reply_text(f"Здравствуйте! 🌷\n\nЧем могу помочь?", reply_markup=menu)
-                        return
-                    
-                    # 4. Установка города
-                    match = re.search(r'(живу в|я из|город)\s+([а-яА-ЯёЁa-zA-Z\s\-]+)', recognized)
-                    if match:
-                        city = match.group(2).strip().capitalize()
-                        if len(city) > 1:
-                            user_city[user_id] = city
-                            await processing.delete()
-                            await update.message.reply_text(f"✅ Запомнила! Ваш город: {city}\n\n🌤️ Теперь спрашивайте погоду!", reply_markup=menu)
-                            return
-                    
-                    # 5. AI ответ (если не сработали команды)
-                    ai_reply = await get_ai_response(recognized)
-                    if ai_reply:
-                        await processing.delete()
-                        await update.message.reply_text(ai_reply, reply_markup=menu)
-                    else:
-                        await processing.edit_text(
-                            f"😊 Вы сказали: {recognized}\n\n"
-                            f"Я вас понял! Чтобы узнать погоду — скажите «погода». "
-                            f"Чтобы узнать время — скажите «время». Просто поболтаем?",
-                            reply_markup=menu
-                        )
-                    
-                else:
-                    await processing.edit_text("❌ Ошибка распознавания голоса. Попробуйте ещё раз.", reply_markup=menu)
-                    
+        # Распознаём (бесплатно, без ключа)
+        recognized = await asyncio.get_event_loop().run_in_executor(
+            None, recognize_voice, bytes(audio_bytes)
+        )
+        
+        if not recognized:
+            await processing.edit_text(
+                "😔 Не удалось распознать голос.\n\n"
+                "Попробуйте:\n"
+                "• Говорить чётче\n"
+                "• Уменьшить шум\n"
+                "• Отправить сообщение короче (3-5 секунд)\n\n"
+                "Или напишите текстом!",
+                reply_markup=menu
+            )
+            return
+        
+        await processing.edit_text(f"📝 Вы сказали: {recognized}\n\n🤔 Обрабатываю...")
+        
+        # Проверяем команды
+        # Погода
+        if any(w in recognized for w in ['погод', 'прогноз', 'дождь', 'ветер', 'температура']):
+            city = user_city.get(user_id)
+            if not city:
+                await processing.edit_text("🌤️ Сначала скажите ваш город: «Я живу в Москве»", reply_markup=menu)
+                return
+            
+            weather = await get_weather(city)
+            if weather:
+                await processing.delete()
+                await update.message.reply_text(weather, parse_mode="Markdown", reply_markup=menu)
+            else:
+                await processing.edit_text(f"😔 Не удалось найти погоду для {city}", reply_markup=menu)
+            return
+        
+        # Время
+        if any(w in recognized for w in ['время', 'часы', 'который час', 'дата']):
+            now = datetime.now()
+            await processing.delete()
+            await update.message.reply_text(f"📅 {now.strftime('%d.%m.%Y')}\n🕐 {now.strftime('%H:%M')}", reply_markup=menu)
+            return
+        
+        # Приветствие
+        if any(w in recognized for w in ['привет', 'здравствуй', 'доброе утро', 'добрый день']):
+            await processing.delete()
+            await update.message.reply_text(f"Здравствуйте! 🌷\n\nЧем могу помочь?", reply_markup=menu)
+            return
+        
+        # Установка города
+        match = re.search(r'(живу в|я из|город)\s+([а-яА-ЯёЁa-zA-Z\s\-]+)', recognized)
+        if match:
+            city = match.group(2).strip().capitalize()
+            if len(city) > 1:
+                user_city[user_id] = city
+                await processing.delete()
+                await update.message.reply_text(f"✅ Запомнила! Ваш город: {city}\n\n🌤️ Теперь спрашивайте погоду!", reply_markup=menu)
+                return
+        
+        # Если ничего не подошло
+        await processing.edit_text(
+            f"😊 Вы сказали: {recognized}\n\n"
+            f"Я вас понял!\n\n"
+            f"• Чтобы узнать погоду — скажите «погода»\n"
+            f"• Чтобы узнать время — скажите «время»\n"
+            f"• Чтобы я запомнил город — скажите «Я живу в Москве»",
+            reply_markup=menu
+        )
+        
     except Exception as e:
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка при обработке голоса. Попробуйте написать текстом.", reply_markup=menu)
@@ -243,8 +263,7 @@ async def help_cmd(update: Update, context):
         "• Сказать «погода» — покажет погоду\n"
         "• Сказать «время» — покажет время\n"
         "• Сказать «привет» — поздоровается\n"
-        "• Сказать «я живу в Москве» — запомнит город\n"
-        "• Сказать любой вопрос — отвечу через AI\n\n"
+        "• Сказать «я живу в Москве» — запомнит город\n\n"
         "**Текстом то же самое!**",
         parse_mode="Markdown", reply_markup=menu
     )
