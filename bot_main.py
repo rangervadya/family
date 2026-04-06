@@ -43,7 +43,6 @@ def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
-    # Пользователи
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -55,7 +54,6 @@ def init_db():
         )
     """)
     
-    # Напоминания
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +65,6 @@ def init_db():
         )
     """)
     
-    # Активности
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,14 +74,13 @@ def init_db():
         )
     """)
     
-    # Связи родственников (двусторонние)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS family_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user1_id INTEGER,
             user2_id INTEGER,
             relation_type TEXT,
-            status TEXT DEFAULT 'pending',
+            status TEXT DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user1_id, user2_id)
         )
@@ -114,7 +110,6 @@ def get_user(telegram_id):
     return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]} if row else None
 
 def add_family_link(user1_id, user2_id, relation_type):
-    """Добавление связи между родственниками"""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     try:
@@ -130,30 +125,25 @@ def add_family_link(user1_id, user2_id, relation_type):
     finally:
         conn.close()
 
-def get_family_members(user_id, relation_filter=None):
-    """Получение всех родственников пользователя"""
+def get_family_members(user_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    
-    query = """
+    cursor.execute("""
         SELECT 
             CASE 
                 WHEN user1_id = ? THEN user2_id
                 ELSE user1_id
             END as relative_id,
-            relation_type,
-            status
+            relation_type
         FROM family_links 
         WHERE (user1_id = ? OR user2_id = ?) AND status = 'active'
-    """
-    cursor.execute(query, (user_id, user_id, user_id))
+    """, (user_id, user_id, user_id))
     rows = cursor.fetchall()
     
     result = []
     for row in rows:
         relative_id = row[0]
         relation = row[1]
-        # Получаем данные о родственнике
         cursor.execute("SELECT name, role FROM users WHERE telegram_id = ?", (relative_id,))
         user_data = cursor.fetchone()
         if user_data:
@@ -167,7 +157,6 @@ def get_family_members(user_id, relation_filter=None):
     return result
 
 def get_family_stats(user_id):
-    """Статистика по семье"""
     members = get_family_members(user_id)
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -175,11 +164,8 @@ def get_family_stats(user_id):
     stats = {"members": members, "sos_alerts": 0, "total_activities": 0}
     
     for member in members:
-        # Считаем SOS от родственника
         cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-7 days')", (member["id"],))
         stats["sos_alerts"] += cursor.fetchone()[0]
-        
-        # Считаем активность
         cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND created_at > datetime('now', '-7 days')", (member["id"],))
         stats["total_activities"] += cursor.fetchone()[0]
     
@@ -265,22 +251,64 @@ async def ai_chat(message: str) -> str:
 # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 
 async def start(update: Update, context):
-    user = update.effective_user
-    save_user(user.id, name=user.first_name, role="senior")
+    """Полный сброс и начало заново"""
+    user_id = update.effective_user.id
+    
+    # Очищаем все данные пользователя в сессии
+    context.user_data.clear()
+    
+    # Завершаем все активные диалоги
+    current = context.chat_data.get("conversation", {})
+    if user_id in current:
+        del current[user_id]
+    
+    # Проверяем, есть ли пользователь в БД
+    user = get_user(user_id)
+    
+    # Показываем приветствие с выбором роли
+    keyboard = [["Я пользователь", "Я родственник"]]
     await update.message.reply_text(
         "👋 *Добро пожаловать в бот-компаньон «Семья»!*\n\n"
-        "Я помогу вам:\n"
-        "• 💬 *Общаться* — просто пишите\n"
-        "• 📅 *Напоминания* — /add_reminder\n"
-        "• 👥 *События* — /events\n"
-        "• 🆘 *SOS* — экстренная помощь для всей семьи\n"
-        "• 👨‍👩‍👧 *Семья* — связь с родственниками\n"
-        "• 🌤️ *Погода* — /weather\n"
-        "• 🎮 *Игры* — /games\n"
-        "• 📖 *Ностальгия* — /nostalgia\n\n"
-        "Начните общение прямо сейчас! 😊",
-        parse_mode="Markdown", reply_markup=main_menu
+        "Давайте познакомимся.\n"
+        "Кто вы?\n\n"
+        "➤ Я пожилой пользователь\n"
+        "➤ Я родственник/опекун",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     )
+    return 1  # Состояние выбора роли
+
+async def role_choice(update: Update, context):
+    """Обработка выбора роли"""
+    text = update.message.text.lower()
+    user_id = update.effective_user.id
+    
+    if "родственник" in text:
+        context.user_data["role"] = "relative"
+        await update.message.reply_text(
+            "👨‍👩‍👧 *Вы выбрали роль «Родственник»*\n\n"
+            "Теперь вы можете:\n"
+            "• Привязаться к пожилому родственнику\n"
+            "• Получать уведомления о его активности\n"
+            "• Помогать удалённо\n\n"
+            "Вот главное меню:",
+            parse_mode="Markdown", reply_markup=main_menu
+        )
+        save_user(user_id, name=update.effective_user.first_name, role="relative")
+    else:
+        context.user_data["role"] = "senior"
+        await update.message.reply_text(
+            "👵 *Вы выбрали роль «Пожилой пользователь»*\n\n"
+            "Теперь вы можете:\n"
+            "• Общаться с ботом\n"
+            "• Добавлять напоминания\n"
+            "• Получать помощь и поддержку\n\n"
+            "Вот главное меню:",
+            parse_mode="Markdown", reply_markup=main_menu
+        )
+        save_user(user_id, name=update.effective_user.first_name, role="senior")
+    
+    return -1  # Завершаем диалог
 
 async def family_menu_handler(update: Update, context):
     text = update.message.text
@@ -417,7 +445,6 @@ async def send_to_relative(update: Update, context):
         target_id = int(context.args[0])
         message = " ".join(context.args[1:])
         
-        # Проверяем, есть ли связь
         members = get_family_members(update.effective_user.id)
         is_relative = any(m["id"] == target_id for m in members)
         
@@ -441,7 +468,7 @@ async def send_to_relative(update: Update, context):
 async def help_command(update: Update, context):
     await update.message.reply_text(
         "🤖 *Список команд:*\n\n"
-        "*/start* — начать заново\n"
+        "*/start* — начать заново (сброс роли)\n"
         "*/help* — эта справка\n"
         "*/weather* — погода\n"
         "*/add_reminder* — добавить напоминание\n"
@@ -488,7 +515,6 @@ async def sos_command(update: Update, context):
     user = get_user(user_id)
     user_name = user["name"] if user else "Родственник"
     
-    # Отправляем уведомления всем родственникам
     members = get_family_members(user_id)
     notified = 0
     
@@ -671,7 +697,6 @@ async def handle_message(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text.strip()
     
-    # Убираем эмодзи меню
     if text and text[0] in ["💬", "📅", "👥", "🆘", "👨‍👩‍👧", "⚙️", "🌤️", "🎮", "📖"]:
         text = text[1:].strip()
         if not text:
@@ -680,7 +705,6 @@ async def handle_message(update: Update, context):
     
     text_lower = text.lower()
     
-    # Обработка команд из чата
     if text_lower in ['погода', 'погоду', 'какая погода']:
         await weather_command(update, context)
         return
@@ -701,7 +725,6 @@ async def handle_message(update: Update, context):
         await family_command(update, context)
         return
     
-    # AI ответ
     log_activity(user_id, "talk")
     msg = await update.message.reply_text("🤔 Думаю...")
     reply = await ai_chat(text)
@@ -746,8 +769,15 @@ def main():
     
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # Conversation для выбора роли при старте
+    start_conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={1: [MessageHandler(filters.TEXT & ~filters.COMMAND, role_choice)]},
+        fallbacks=[CommandHandler("start", start)]
+    )
+    app.add_handler(start_conv)
+    
     # Команды
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("menu", family_command))
     app.add_handler(CommandHandler("family", family_command))
@@ -766,7 +796,7 @@ def main():
     app.add_handler(CommandHandler("sos", sos_command))
     app.add_handler(CommandHandler("id", send_to_relative))
     
-    # Добавление родственника с ConversationHandler
+    # Добавление родственника
     add_relative_conv = ConversationHandler(
         entry_points=[CommandHandler("add_relative", add_relative_start)],
         states={1: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_relative_id)]},
