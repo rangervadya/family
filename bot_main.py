@@ -719,4 +719,77 @@ async def handle_message(update: Update, context):
             "• /family — семейное меню\n"
             "• /help — все команды\n\n"
             "Просто поговори со мной! 💬",
-            parse_mode
+            parse_mode="Markdown", reply_markup=main_menu
+        )
+
+async def handle_voice(update: Update, context):
+    await update.message.reply_text(
+        "🎤 *Голосовое сообщение получено!*\n\n"
+        "Я пока учусь распознавать голос.\n"
+        "Пожалуйста, напиши текстом — я отвечу! 😊\n\n"
+        "Мои команды:\n"
+        "• *погода* — узнать погоду\n"
+        "• *время* — узнать время\n"
+        "• /family — семейное меню\n"
+        "• /help — все команды",
+        parse_mode="Markdown", reply_markup=main_menu
+    )
+
+# ==================== ЗАПУСК ====================
+
+def main():
+    if not TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN не задан!")
+        return
+    
+    init_db()
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Команды
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("menu", family_command))
+    app.add_handler(CommandHandler("family", family_command))
+    app.add_handler(CommandHandler("weather", weather_command))
+    app.add_handler(CommandHandler("reminders", reminders_list))
+    app.add_handler(CommandHandler("events", events_command))
+    app.add_handler(CommandHandler("companions", companions_command))
+    app.add_handler(CommandHandler("volunteers", volunteers_command))
+    app.add_handler(CommandHandler("health_extra", health_extra_command))
+    app.add_handler(CommandHandler("helper", helper_command))
+    app.add_handler(CommandHandler("games", games_command))
+    app.add_handler(CommandHandler("nostalgia", nostalgia_command))
+    app.add_handler(CommandHandler("courses", courses_command))
+    app.add_handler(CommandHandler("achievements", achievements_command))
+    app.add_handler(CommandHandler("voice_help", voice_help_command))
+    app.add_handler(CommandHandler("sos", sos_command))
+    app.add_handler(CommandHandler("id", send_to_relative))
+    
+    # Добавление родственника с ConversationHandler
+    add_relative_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_relative", add_relative_start)],
+        states={1: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_relative_id)]},
+        fallbacks=[]
+    )
+    app.add_handler(add_relative_conv)
+    
+    # Напоминания
+    reminder_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_reminder", add_reminder_start)],
+        states={1: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reminder_time)],
+                2: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reminder_text)]},
+        fallbacks=[]
+    )
+    app.add_handler(reminder_conv)
+    
+    # Обработчики сообщений
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.Regex("^(👵 Мои бабушки/дедушки|👶 Мои внуки/дети|➕ Добавить родственника|📊 Статистика семьи|🔙 Назад в меню)$"), family_menu_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    logger.info("✅ Бот запущен!")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
