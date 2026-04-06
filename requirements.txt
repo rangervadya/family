@@ -4,3 +4,5 @@ flask==2.3.3
 requests==2.31.0
 python-dotenv==1.0.1
 httpx==0.25.2
+pydub==0.25.1
+SpeechRecognition==3.10.0
