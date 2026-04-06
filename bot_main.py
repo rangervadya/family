@@ -434,14 +434,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     try:
+        logger.info(f"🎤 Processing voice message from user {user.id if user else 'unknown'}")
+        logger.info(f"🎤 Voice duration: {voice.duration} seconds")
+        
         # Скачиваем голосовое сообщение
         file = await context.bot.get_file(voice.file_id)
-        audio_bytes = await file.download_as_bytearray()
+        logger.info(f"🎤 File downloaded: {file.file_id}")
         
-        logger.info(f"Voice file size: {len(audio_bytes)} bytes")
+        audio_bytes = await file.download_as_bytearray()
+        logger.info(f"🎤 Audio bytes size: {len(audio_bytes)} bytes")
         
         # Распознаём текст
+        logger.info("🎤 Calling voice_processor.process_voice()...")
         recognized_text = await voice_processor.process_voice(bytes(audio_bytes))
+        logger.info(f"🎤 Recognized text: '{recognized_text}'")
         
         if recognized_text:
             await processing_msg.edit_text(
@@ -466,16 +472,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "😔 Не удалось распознать голосовое сообщение.\n\n"
                 "Попробуйте:\n"
                 "• Говорить чётче и медленнее\n"
-                "• Отправить сообщение короче\n"
+                "• Отправить сообщение короче (5-10 секунд)\n"
                 "• Или просто напишите текстом",
                 reply_markup=MAIN_MENU_KEYBOARD,
             )
             
     except Exception as e:
-        logger.error(f"Voice handling error: {e}")
+        logger.error(f"Voice handling error: {e}", exc_info=True)
         await processing_msg.edit_text(
-            "❌ Произошла ошибка при обработке голосового сообщения.\n\n"
-            "Попробуйте ещё раз или напишите текстом.",
+            f"❌ Произошла ошибка: {str(e)[:100]}\n\nПопробуйте ещё раз или напишите текстом.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
 
