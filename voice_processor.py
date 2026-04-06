@@ -19,7 +19,7 @@ class VoiceProcessor:
         if not self.available:
             return None
 
-        logger.info(f"🎤 Processing {len(file_bytes)} bytes")
+        logger.info(f"Processing {len(file_bytes)} bytes")
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -37,7 +37,7 @@ class VoiceProcessor:
                         result = await response.json()
                         text = result.get("text", "")
                         if text:
-                            logger.info(f"🎤 Recognized: {text[:50]}")
+                            logger.info(f"Recognized: {text[:50]}")
                             return text
                     else:
                         logger.error(f"Whisper API error: {response.status}")
