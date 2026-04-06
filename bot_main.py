@@ -434,20 +434,37 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     try:
-        logger.info(f"🎤 Voice message from {user.id if user else 'unknown'}, duration: {voice.duration}s")
+        logger.info("=" * 50)
+        logger.info("🎤 START VOICE PROCESSING")
+        logger.info(f"🎤 User ID: {user.id if user else 'unknown'}")
+        logger.info(f"🎤 Voice duration: {voice.duration} seconds")
+        logger.info(f"🎤 Voice file_id: {voice.file_id}")
         
         # Скачиваем голосовое сообщение
+        logger.info("🎤 Downloading voice file...")
         file = await context.bot.get_file(voice.file_id)
+        logger.info(f"🎤 File path: {file.file_path}")
+        
         audio_bytes = await file.download_as_bytearray()
         logger.info(f"🎤 Downloaded {len(audio_bytes)} bytes")
         
-        # Распознаём текст
+        # Проверяем, доступен ли голосовой процессор
         from voice_processor import voice_processor
+        logger.info(f"🎤 Voice processor available: {voice_processor.available}")
+        
+        if not voice_processor.available:
+            await processing_msg.edit_text(
+                "❌ Голосовой помощник временно недоступен.\n\nПожалуйста, напишите текстом.",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            return
+        
+        # Распознаём текст
+        logger.info("🎤 Calling voice_processor.process_voice()...")
         recognized_text = await voice_processor.process_voice(bytes(audio_bytes))
+        logger.info(f"🎤 Recognized text: '{recognized_text}'")
         
         if recognized_text:
-            logger.info(f"🎤 Recognized: {recognized_text}")
-            
             await processing_msg.edit_text(
                 f"📝 Вы сказали:\n\n*\"{recognized_text}\"*\n\n🤔 Думаю над ответом...",
                 parse_mode="Markdown"
@@ -483,6 +500,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "❌ Ошибка при обработке голосового сообщения.\n\nПожалуйста, напишите текстом.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
+    
+    logger.info("🎤 END VOICE PROCESSING")
+    logger.info("=" * 50)
 
 async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка сообщений о городе"""
