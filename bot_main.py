@@ -2,7 +2,6 @@ import os
 import re
 import logging
 import aiohttp
-import asyncio
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -64,7 +63,7 @@ async def get_weather(city: str) -> str:
 
 async def get_ai_response(message: str) -> str:
     if not OPENROUTER_KEY:
-        return "AI временно недоступен."
+        return None
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -77,11 +76,9 @@ async def get_ai_response(message: str) -> str:
                 if resp.status == 200:
                     data = await resp.json()
                     return data["choices"][0]["message"]["content"]
-                else:
-                    return "Ошибка API. Попробуйте позже."
     except Exception as e:
         logger.error(f"AI error: {e}")
-        return "Ошибка. Попробуйте ещё раз."
+    return None
 
 # ==================== ОБРАБОТЧИК ТЕКСТА ====================
 
@@ -92,7 +89,6 @@ async def handle_text(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text.strip()
     
-    # Убираем эмодзи меню
     if text and text[0] in ["💬", "📅", "👥", "🆘", "👨‍👩‍👧", "⚙️"]:
         text = text[1:].strip()
         if not text:
@@ -102,7 +98,7 @@ async def handle_text(update: Update, context):
     text_lower = text.lower()
     
     # Погода
-    if any(w in text_lower for w in ['погод', 'прогноз', 'дождь', 'ветер', 'температура', 'солнце']):
+    if any(w in text_lower for w in ['погод', 'прогноз', 'дождь', 'ветер', 'температура']):
         city = user_city.get(user_id)
         if not city:
             await update.message.reply_text("🌤️ Скажите ваш город: «Я живу в Москве»", reply_markup=menu)
@@ -117,7 +113,7 @@ async def handle_text(update: Update, context):
         return
     
     # Время
-    if any(w in text_lower for w in ['время', 'часы', 'который час', 'дата', 'сегодня']):
+    if any(w in text_lower for w in ['время', 'часы', 'который час', 'дата']):
         now = datetime.now()
         await update.message.reply_text(f"📅 {now.strftime('%d.%m.%Y')}\n🕐 {now.strftime('%H:%M')}", reply_markup=menu)
         return
@@ -139,8 +135,11 @@ async def handle_text(update: Update, context):
     # AI ответ
     thinking = await update.message.reply_text("🤔 Думаю...")
     reply = await get_ai_response(text)
-    await thinking.delete()
-    await update.message.reply_text(reply, reply_markup=menu)
+    if reply:
+        await thinking.delete()
+        await update.message.reply_text(reply, reply_markup=menu)
+    else:
+        await thinking.edit_text("😊 Я вас понял! Если хотите узнать погоду — скажите «погода». Чтобы узнать время — «время». Просто поболтаем?", reply_markup=menu)
 
 # ==================== ОБРАБОТЧИК ГОЛОСА ====================
 
@@ -173,7 +172,9 @@ async def handle_voice(update: Update, context):
                     
                     await processing.edit_text(f"📝 Вы сказали: {recognized}\n\n🤔 Обрабатываю...")
                     
-                    # Погода
+                    # ==== ПРОВЕРКА КОМАНД ====
+                    
+                    # 1. Погода
                     if any(w in recognized for w in ['погод', 'прогноз', 'дождь', 'ветер', 'температура', 'солнце']):
                         city = user_city.get(user_id)
                         if not city:
@@ -188,20 +189,20 @@ async def handle_voice(update: Update, context):
                             await processing.edit_text(f"😔 Не удалось найти погоду для {city}", reply_markup=menu)
                         return
                     
-                    # Время
+                    # 2. Время
                     if any(w in recognized for w in ['время', 'часы', 'который час', 'дата', 'сегодня']):
                         now = datetime.now()
                         await processing.delete()
                         await update.message.reply_text(f"📅 {now.strftime('%d.%m.%Y')}\n🕐 {now.strftime('%H:%M')}", reply_markup=menu)
                         return
                     
-                    # Приветствие
+                    # 3. Приветствие
                     if any(w in recognized for w in ['привет', 'здравствуй', 'доброе утро', 'добрый день']):
                         await processing.delete()
                         await update.message.reply_text(f"Здравствуйте! 🌷\n\nЧем могу помочь?", reply_markup=menu)
                         return
                     
-                    # Установка города
+                    # 4. Установка города
                     match = re.search(r'(живу в|я из|город)\s+([а-яА-ЯёЁa-zA-Z\s\-]+)', recognized)
                     if match:
                         city = match.group(2).strip().capitalize()
@@ -211,10 +212,18 @@ async def handle_voice(update: Update, context):
                             await update.message.reply_text(f"✅ Запомнила! Ваш город: {city}\n\n🌤️ Теперь спрашивайте погоду!", reply_markup=menu)
                             return
                     
-                    # AI ответ
+                    # 5. AI ответ (если не сработали команды)
                     ai_reply = await get_ai_response(recognized)
-                    await processing.delete()
-                    await update.message.reply_text(ai_reply, reply_markup=menu)
+                    if ai_reply:
+                        await processing.delete()
+                        await update.message.reply_text(ai_reply, reply_markup=menu)
+                    else:
+                        await processing.edit_text(
+                            f"😊 Вы сказали: {recognized}\n\n"
+                            f"Я вас понял! Чтобы узнать погоду — скажите «погода». "
+                            f"Чтобы узнать время — скажите «время». Просто поболтаем?",
+                            reply_markup=menu
+                        )
                     
                 else:
                     await processing.edit_text("❌ Ошибка распознавания голоса. Попробуйте ещё раз.", reply_markup=menu)
@@ -235,7 +244,8 @@ async def help_cmd(update: Update, context):
         "• Сказать «время» — покажет время\n"
         "• Сказать «привет» — поздоровается\n"
         "• Сказать «я живу в Москве» — запомнит город\n"
-        "• Сказать любой вопрос — ответит через AI",
+        "• Сказать любой вопрос — отвечу через AI\n\n"
+        "**Текстом то же самое!**",
         parse_mode="Markdown", reply_markup=menu
     )
 
