@@ -20,34 +20,52 @@ class VoiceProcessor:
             logger.warning("Voice recognition not available")
             return None
 
+        logger.info(f"🎤 process_voice called with {len(file_bytes)} bytes")
+        
         try:
+            # Сохраняем временно файл для отладки (опционально)
+            # with open("/tmp/test_audio.ogg", "wb") as f:
+            #     f.write(file_bytes)
+            
             async with aiohttp.ClientSession() as session:
                 form_data = aiohttp.FormData()
                 form_data.add_field('file', file_bytes, filename='audio.ogg', content_type='audio/ogg')
                 form_data.add_field('model', 'openai/whisper-large-v3-turbo')
-
+                
+                logger.info("🎤 Sending request to OpenRouter Whisper API...")
+                
                 async with session.post(
                     self.base_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "multipart/form-data"
+                    },
                     data=form_data,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=60)
                 ) as response:
+                    response_text = await response.text()
+                    logger.info(f"🎤 Response status: {response.status}")
+                    logger.info(f"🎤 Response body: {response_text[:500]}")
+                    
                     if response.status == 200:
-                        result = await response.json()
+                        import json
+                        result = json.loads(response_text)
                         text = result.get("text", "")
                         if text:
-                            logger.info(f"🎤 Recognized: {text[:50]}...")
+                            logger.info(f"🎤 Successfully recognized: {text[:100]}")
                             return text
+                        else:
+                            logger.warning("Empty response from Whisper")
+                            return None
                     else:
-                        error = await response.text()
-                        logger.error(f"Whisper API error: {response.status} - {error}")
+                        logger.error(f"Whisper API error: {response.status} - {response_text}")
                         return None
 
         except aiohttp.ClientError as e:
             logger.error(f"Network error: {e}")
             return None
         except Exception as e:
-            logger.error(f"Voice processing error: {e}")
+            logger.error(f"Voice processing error: {e}", exc_info=True)
             return None
 
 voice_processor = VoiceProcessor()
