@@ -1,64 +1,55 @@
 import os
 import logging
 import io
-import requests
-import json
+import speech_recognition as sr
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 
 class VoiceProcessor:
     def __init__(self):
+        self.recognizer = sr.Recognizer()
         self.available = True
-        logger.info("✅ Voice processor ready (using direct Google Speech API)")
+        logger.info("✅ Voice processor ready (Google Speech Recognition - FREE)")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
-        logger.info(f"🎤 Processing {len(file_bytes)} bytes")
+        logger.info(f"🎤 Processing voice message: {len(file_bytes)} bytes")
         
         try:
-            # Конвертируем OGG в FLAC (Google Speech API лучше понимает FLAC)
-            import subprocess
-            import tempfile
+            # Конвертируем OGG в WAV
+            audio = AudioSegment.from_ogg(io.BytesIO(file_bytes))
             
-            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as ogg_file:
-                ogg_file.write(file_bytes)
-                ogg_path = ogg_file.name
+            # Конвертируем в нужный формат (моно, 16kHz)
+            audio = audio.set_channels(1).set_frame_rate(16000)
             
-            flac_path = ogg_path.replace('.ogg', '.flac')
+            # Экспортируем в WAV
+            wav_io = io.BytesIO()
+            audio.export(wav_io, format="wav")
+            wav_io.seek(0)
             
-            # Конвертируем через ffmpeg (если есть)
+            # Распознаём через Google Speech Recognition
+            with sr.AudioFile(wav_io) as source:
+                # Убираем фоновый шум
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                audio_data = self.recognizer.record(source)
+            
+            # Пробуем распознать русскую речь
             try:
-                subprocess.run(
-                    ['ffmpeg', '-i', ogg_path, '-ac', '1', '-ar', '16000', flac_path],
-                    check=True, capture_output=True
-                )
-                with open(flac_path, 'rb') as f:
-                    flac_bytes = f.read()
-            except:
-                # Если ffmpeg нет, возвращаем None
-                logger.error("ffmpeg not available")
-                return None
-            finally:
-                os.unlink(ogg_path)
-                if os.path.exists(flac_path):
-                    os.unlink(flac_path)
+                text = self.recognizer.recognize_google(audio_data, language="ru-RU")
+                logger.info(f"🎤 Recognized (RU): {text}")
+                return text
+            except sr.UnknownValueError:
+                logger.warning("Could not recognize Russian speech")
             
-            # Отправляем в Google Speech API (бесплатно, но с ограничениями)
-            url = "https://www.google.com/speech-api/v2/recognize?output=json&lang=ru&key=AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+            # Пробуем английский
+            try:
+                text = self.recognizer.recognize_google(audio_data, language="en-US")
+                logger.info(f"🎤 Recognized (EN): {text}")
+                return text
+            except sr.UnknownValueError:
+                logger.warning("Could not recognize English speech")
             
-            headers = {'Content-Type': 'audio/x-flac; rate=16000'}
-            response = requests.post(url, headers=headers, data=flac_bytes)
-            
-            if response.status_code == 200:
-                for line in response.text.strip().split('\n'):
-                    try:
-                        data = json.loads(line)
-                        if 'result' in data and data['result']:
-                            text = data['result'][0]['alternative'][0]['transcript']
-                            logger.info(f"🎤 Recognized: {text}")
-                            return text
-                    except:
-                        continue
-            
+            logger.error("Speech recognition failed - no text detected")
             return None
             
         except Exception as e:
