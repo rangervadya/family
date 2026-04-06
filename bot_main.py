@@ -8,7 +8,7 @@ import sqlite3
 import aiohttp
 import asyncio
 from enum import Enum, auto
-from typing import Final, Optional
+from typing import Final
 from datetime import time, datetime
 
 from telegram import (
@@ -56,18 +56,17 @@ from storage import (
 from ai_service import ai_service
 from voice_processor import voice_processor
 
-# Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# ==================== КОНСТАНТЫ ====================
 
 class Role(Enum):
     SENIOR = "senior"
     RELATIVE = "relative"
+
 
 class OnboardingState(Enum):
     CHOOSING_ROLE = auto()
@@ -77,9 +76,11 @@ class OnboardingState(Enum):
     SENIOR_INTERESTS = auto()
     RELATIVE_CODE = auto()
 
+
 class MedsState(Enum):
     ASK_TIME = auto()
     ASK_TEXT = auto()
+
 
 MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     [
@@ -90,7 +91,6 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# ==================== ПОГОДА ====================
 
 async def get_weather_async(city: str) -> str:
     api_key = os.environ.get("OPENWEATHER_API_KEY", "")
@@ -147,7 +147,6 @@ async def get_weather_async(city: str) -> str:
             continue
     return None
 
-# ==================== ОНБОРДИНГ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = ("Здравствуйте! Я бот-компаньон «Семья» 🏡\n\n"
@@ -159,6 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return OnboardingState.CHOOSING_ROLE.value
 
+
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip().lower()
     if "родствен" in text:
@@ -169,10 +169,12 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text("Рада знакомству! 🌷 Как вас зовут?", reply_markup=ReplyKeyboardRemove())
     return OnboardingState.SENIOR_NAME.value
 
+
 async def senior_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["name"] = (update.message.text or "").strip()
     await update.message.reply_text(f"Очень приятно, {context.user_data['name']}!\n\nСколько вам лет?")
     return OnboardingState.SENIOR_AGE.value
+
 
 async def senior_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip()
@@ -183,10 +185,12 @@ async def senior_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("В каком городе вы живёте?")
     return OnboardingState.SENIOR_CITY.value
 
+
 async def senior_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["city"] = (update.message.text or "").strip()
     await update.message.reply_text("Отлично!\n\nРасскажите, чем вы любите заниматься?")
     return OnboardingState.SENIOR_INTERESTS.value
+
 
 async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["interests"] = (update.message.text or "").strip()
@@ -204,13 +208,13 @@ async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(f"Спасибо, {name_for_text}! Я всё запомнила.\n\nВот главное меню:", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
+
 async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     upsert_user(telegram_id=user.id if user else 0, role=Role.RELATIVE.value, name=user.first_name if user else None)
     await update.message.reply_text("Спасибо! Код принят.\n\nВот главное меню:", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
-# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
 
 async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
@@ -228,6 +232,7 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await handle_settings(update, context)
     else:
         await handle_talk(update, context)
+
 
 async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -297,7 +302,6 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await thinking.delete()
         await update.message.reply_text(f"Извините, {name}, ошибка. Попробуйте ещё раз! 😊", reply_markup=MAIN_MENU_KEYBOARD)
 
-# ==================== ГОЛОСОВЫЕ СООБЩЕНИЯ ====================
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -334,6 +338,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Voice error: {e}")
         await processing_msg.edit_text("❌ Ошибка при обработке голоса.\n\nПожалуйста, напишите текстом.", reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_message = (update.message.text or "").strip()
     user = update.effective_user
@@ -349,6 +354,7 @@ async def handle_set_city(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         upsert_user(telegram_id=user.id if user else 0, role=context.user_data.get("role", "senior"), city=city)
         await update.message.reply_text(f"✅ Запомнила! Ваш город: **{city}**\n\n🌤️ Теперь узнаю погоду!", parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     reminders = list_reminders(user.id if user else 0)
@@ -360,8 +366,10 @@ async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         lines.append(f"{'✅' if r['enabled'] else '⏸'} {r['time_local']} — {r['text']}")
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_events_overview(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -375,6 +383,7 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception as e:
                 logger.warning(f"Failed to notify {rel_id}: {e}")
 
+
 async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     summary = get_activity_summary(user.id if user else 0)
@@ -385,17 +394,19 @@ async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     lines.append(f"🎤 Голосовых: {summary.get('voice', 0)}")
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("⚙️ Настройки\n\n/add_meds — напоминания\n/weather — погода\n/enable_checkin — ежедневный опрос\n/voice_help — голосовые", reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await handle_talk(update, context)
 
-# ==================== НАПОМИНАНИЯ ====================
 
 async def add_meds_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("💊 Когда напоминать? Напишите время ЧЧ:ММ, например 09:00", reply_markup=ReplyKeyboardRemove())
     return MedsState.ASK_TIME.value
+
 
 async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip()
@@ -411,6 +422,7 @@ async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Что напоминать? Например: «Принять таблетку»")
     return MedsState.ASK_TEXT.value
 
+
 async def add_meds_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     meds_time = context.user_data.get("meds_time", "09:00")
@@ -419,14 +431,15 @@ async def add_meds_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text(f"✅ Хорошо! Буду каждый день в {meds_time} напоминать: «{text}»", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
+
 async def meds_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("❌ Отменено.", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
-# ==================== ЕЖЕДНЕВНАЯ ПРОВЕРКА ====================
 
 async def daily_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(chat_id=context.job.chat_id, text="🌞 Доброе утро! Как вы себя чувствуете?")
+
 
 async def enable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
@@ -435,16 +448,17 @@ async def enable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.job_queue.run_daily(daily_checkin, time=time(hour=10, minute=0), chat_id=chat_id, name=f"checkin-{chat_id}")
     await update.message.reply_text("✅ Включено! Буду спрашивать каждый день в 10:00.", reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def disable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     for job in context.job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
         job.schedule_removal()
     await update.message.reply_text("❌ Отключено.", reply_markup=MAIN_MENU_KEYBOARD)
 
-# ==================== КОМАНДЫ ====================
 
 async def voice_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("🎤 Отправьте голосовое сообщение, я распознаю и отвечу!", reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -461,38 +475,50 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await update.message.reply_text(f"😔 Не найдено: {city}", reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("🤖 **Команды:**\n/start — начать\n/weather — погода\n/add_meds — напоминания\n/enable_checkin — ежедневный опрос\n/voice_help — голосовые\n/menu — меню", parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("📋 Главное меню:", reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def volunteers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_volunteers_info(), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def health_extra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(health_extra_info(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def helper_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(home_helper_info(), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def games_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(games_menu_text(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def nostalgia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(nostalgia_menu_text(), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def courses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(courses_menu_text(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(achievements_text(), reply_markup=MAIN_MENU_KEYBOARD)
 
+
 async def admin_analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(analytics_info_text(), reply_markup=MAIN_MENU_KEYBOARD)
+
 
 async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
@@ -505,7 +531,6 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except ValueError:
         await update.message.reply_text("❌ ID должен быть числом.", reply_markup=MAIN_MENU_KEYBOARD)
 
-# ==================== ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ====================
 
 def build_application():
     settings = get_settings()
@@ -555,13 +580,12 @@ def build_application():
 
     return application
 
-# ==================== ЗАПУСК ====================
 
 def main() -> None:
     settings = get_settings()
     logger.info("Starting bot...")
     if ai_service.available:
-        logger.info(f"✅ AI Service ready")
+        logger.info("✅ AI Service ready")
     else:
         logger.warning("⚠️ AI Service disabled")
     if voice_processor.available:
@@ -574,6 +598,7 @@ def main() -> None:
     except (TimedOut, NetworkError) as exc:
         print(f"\nError: {exc!r}\n", file=sys.stderr)
         raise SystemExit(1) from exc
+
 
 if __name__ == "__main__":
     main()
