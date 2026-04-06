@@ -1,53 +1,63 @@
 import os
 import logging
 import io
-from pydub import AudioSegment
-import speech_recognition as sr
+import requests
+import json
 
 logger = logging.getLogger(__name__)
 
 class VoiceProcessor:
     def __init__(self):
-        self.recognizer = sr.Recognizer()
         self.available = True
-        logger.info("✅ Voice processor ready (using Google Speech Recognition - FREE)")
+        logger.info("✅ Voice processor ready (using direct Google Speech API)")
 
     async def process_voice(self, file_bytes: bytes, format: str = "ogg") -> str:
         logger.info(f"🎤 Processing {len(file_bytes)} bytes")
         
         try:
-            # Конвертируем OGG в WAV
-            audio = AudioSegment.from_ogg(io.BytesIO(file_bytes))
+            # Конвертируем OGG в FLAC (Google Speech API лучше понимает FLAC)
+            import subprocess
+            import tempfile
             
-            # Конвертируем в моно, 16kHz для лучшего распознавания
-            audio = audio.set_channels(1).set_frame_rate(16000)
+            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as ogg_file:
+                ogg_file.write(file_bytes)
+                ogg_path = ogg_file.name
             
-            # Экспортируем в WAV
-            wav_io = io.BytesIO()
-            audio.export(wav_io, format="wav")
-            wav_io.seek(0)
+            flac_path = ogg_path.replace('.ogg', '.flac')
             
-            # Распознаём через Google Speech Recognition (бесплатно)
-            with sr.AudioFile(wav_io) as source:
-                # Адаптируемся к фоновому шуму
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio_data = self.recognizer.record(source)
-            
-            # Пробуем распознать русскую речь
+            # Конвертируем через ffmpeg (если есть)
             try:
-                text = self.recognizer.recognize_google(audio_data, language="ru-RU")
-                logger.info(f"🎤 Recognized (ru): {text}")
-                return text
-            except sr.UnknownValueError:
-                logger.warning("Could not understand Russian")
+                subprocess.run(
+                    ['ffmpeg', '-i', ogg_path, '-ac', '1', '-ar', '16000', flac_path],
+                    check=True, capture_output=True
+                )
+                with open(flac_path, 'rb') as f:
+                    flac_bytes = f.read()
+            except:
+                # Если ffmpeg нет, возвращаем None
+                logger.error("ffmpeg not available")
+                return None
+            finally:
+                os.unlink(ogg_path)
+                if os.path.exists(flac_path):
+                    os.unlink(flac_path)
             
-            # Пробуем английский
-            try:
-                text = self.recognizer.recognize_google(audio_data, language="en-US")
-                logger.info(f"🎤 Recognized (en): {text}")
-                return text
-            except sr.UnknownValueError:
-                logger.warning("Could not understand English")
+            # Отправляем в Google Speech API (бесплатно, но с ограничениями)
+            url = "https://www.google.com/speech-api/v2/recognize?output=json&lang=ru&key=AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+            
+            headers = {'Content-Type': 'audio/x-flac; rate=16000'}
+            response = requests.post(url, headers=headers, data=flac_bytes)
+            
+            if response.status_code == 200:
+                for line in response.text.strip().split('\n'):
+                    try:
+                        data = json.loads(line)
+                        if 'result' in data and data['result']:
+                            text = data['result'][0]['alternative'][0]['transcript']
+                            logger.info(f"🎤 Recognized: {text}")
+                            return text
+                    except:
+                        continue
             
             return None
             
