@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import logging
 import sys
+import threading
 from enum import Enum, auto
 from typing import Final
 from datetime import time
+from flask import Flask
 
 from telegram import (
     Update,
@@ -57,6 +60,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ==================== FLASK ДЛЯ HEALTH CHECKS ====================
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+@flask_app.route('/health')
+def health_check():
+    return "OK", 200
+
+def run_flask():
+    """Запуск Flask сервера для health checks"""
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port, debug=False)
+
+# ==================== ОСТАЛЬНОЙ КОД БЕЗ ИЗМЕНЕНИЙ ====================
 
 class Role(Enum):
     SENIOR = "senior"
@@ -705,7 +722,8 @@ def build_application():
     return application
 
 
-def main() -> None:
+def run_telegram():
+    """Запуск Telegram бота"""
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
@@ -746,6 +764,16 @@ def main() -> None:
         raise SystemExit(1) from exc
 
 
+def main():
+    """Запуск Flask (для health checks) и Telegram бота в разных потоках"""
+    # Запускаем Telegram бота в фоновом потоке
+    tg_thread = threading.Thread(target=run_telegram, daemon=True)
+    tg_thread.start()
+    logger.info("Telegram бот запущен в фоновом потоке")
+    
+    # Запускаем Flask в основном потоке
+    run_flask()
+
+
 if __name__ == "__main__":
     main()
-
