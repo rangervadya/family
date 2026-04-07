@@ -1,0 +1,15 @@
+# Blueprint для Render.com: фоновый воркер с long polling (Telegram).
+# В дашборде Render добавьте переменную TELEGRAM_BOT_TOKEN (и при необходимости остальные из README).
+
+services:
+  - type: worker
+    name: semya-telegram-bot
+    runtime: python
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.8"
