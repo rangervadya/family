@@ -4,6 +4,7 @@ import os
 import logging
 import sys
 import threading
+import asyncio
 from enum import Enum, auto
 from typing import Final
 from datetime import time
@@ -723,7 +724,7 @@ def build_application():
 
 
 def run_telegram():
-    """Запуск Telegram бота"""
+    """Запуск Telegram бота с правильным event loop"""
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
@@ -741,9 +742,27 @@ def run_telegram():
             "Если видите TimedOut — включите VPN и укажите локальный HTTP/SOCKS-прокси в .env."
         )
 
+    # Создаём новый event loop для этого потока
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     app = build_application()
+    
+    async def start_bot():
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        # Держим бота запущенным
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await app.updater.stop()
+            await app.shutdown()
+    
     try:
-        app.run_polling(close_loop=False, drop_pending_updates=True)
+        loop.run_until_complete(start_bot())
     except (TimedOut, NetworkError) as exc:
         print(
             "\n──────── Не удаётся достучаться до Telegram (api.telegram.org) ────────\n"
