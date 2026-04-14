@@ -6,6 +6,12 @@ import httpx
 
 from bot_config import get_settings
 
+import logging
+
+from ai_service import ai_service
+
+logger = logging.getLogger(__name__)
+
 
 async def generate_companion_reply(user_text: str, name: str | None = None) -> str:
     """Асинхронная заглушка для AI-компаньона.
@@ -30,28 +36,12 @@ async def generate_companion_reply(user_text: str, name: str | None = None) -> s
         f"Сообщение пользователя: {user_text}"
     )
 
+    async def generate_companion_reply(message: str, name: str = "друг", user_id: int = 0) -> str:
+    """Генерация ответа через реальную нейросеть (OpenRouter)"""
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            # Примерный формат; его нужно будет адаптировать под реальный Deepseek API
-            response = await client.post(
-                settings.deepseek_api_url,
-                headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
-                json={"prompt": prompt, "max_tokens": 256},
-            )
-        response.raise_for_status()
-        data = response.json()
-        text: Optional[str] = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content")
-        ) or data.get("text")
-        if not text:
-            raise ValueError("empty response from AI")
-        return text.strip()
-    except Exception:
-        prefix = f"{name}, " if name else ""
-        return (
-            f"{prefix}кажется, у нас временные трудности со связью с умным помощником.\n"
-            "Но я рядом и готова просто поговорить с вами. ❤️"
-        )
+        reply = await ai_service.generate_response(message, user_name=name)
+        return reply
+    except Exception as e:
+        logger.error(f"AI generation failed: {e}")
+        return f"Извините, {name}, что-то пошло не так. Попробуйте позже!"
 
