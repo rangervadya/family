@@ -10,7 +10,7 @@ class AIService:
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         # ✅ Используем стабильную бесплатную модель
-        self.model = "google/gemini-2.0-flash-exp:free"
+        self.model = "deepseek/deepseek-chat:free"
         self.available = bool(self.api_key)
         
         if self.available:
