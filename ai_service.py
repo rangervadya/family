@@ -34,7 +34,9 @@ class AIService:
                     self.base_url,
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://family-bot-b4bd.onrender.com", # Укажите ваш URL
+                        "X-Title": "Family Companion Bot"
                     },
                     json={
                         "model": self.model,
