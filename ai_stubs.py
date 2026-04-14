@@ -1,47 +1,29 @@
-from __future__ import annotations
-
-from typing import Optional
-
-import httpx
-
-from bot_config import get_settings
+"""
+AI stubs for Family Bot - теперь с реальной нейросетью!
+Использует OpenRouter для генерации ответов.
+"""
 
 import logging
-
 from ai_service import ai_service
 
 logger = logging.getLogger(__name__)
 
-
-async def generate_companion_reply(user_text: str, name: str | None = None) -> str:
-    """Асинхронная заглушка для AI-компаньона.
-
-    Если Deepseek не настроен в окружении, возвращаем простой эмпатичный ответ.
-    Если настроен — пробуем сделать HTTP-запрос к API (формат запроса зависит от конкретного провайдера,
-    поэтому здесь остаётся упрощённый пример).
+async def generate_companion_reply(message: str, name: str = "друг", user_id: int = 0) -> str:
     """
-    settings = get_settings()
-    if not settings.deepseek_api_url or not settings.deepseek_api_key:
-        prefix = f"{name}, " if name else ""
-        return (
-            f"{prefix}я вас внимательно слушаю. 🌷\n\n"
-            "Сейчас у меня включён простой режим без настоящего искусственного интеллекта.\n"
-            "Но я всё равно постараюсь поддержать вас. Расскажите, что у вас на душе?"
-        )
+    Генерация ответа через реальную нейросеть.
 
-    prompt = (
-        "Ты добрый, терпеливый собеседник для пожилого человека.\n"
-        "Отвечай простым, тёплым языком, без сложных терминов.\n"
-        "Поддерживай, задавай мягкие уточняющие вопросы.\n\n"
-        f"Сообщение пользователя: {user_text}"
-    )
+    Args:
+        message: Текст сообщения пользователя
+        name: Имя пользователя
+        user_id: Telegram ID (пока не используется, но можно для контекста)
 
-    async def generate_companion_reply(message: str, name: str = "друг", user_id: int = 0) -> str:
-    """Генерация ответа через реальную нейросеть (OpenRouter)"""
+    Returns:
+        str: Ответ бота
+    """
     try:
+        # Используем AI сервис из файла ai_service.py
         reply = await ai_service.generate_response(message, user_name=name)
         return reply
     except Exception as e:
         logger.error(f"AI generation failed: {e}")
         return f"Извините, {name}, что-то пошло не так. Попробуйте позже!"
-
