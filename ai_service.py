@@ -9,7 +9,7 @@ class AIService:
     def __init__(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        # ✅ Используем стабильную бесплатную модель
+        # Используем универсальный роутер для бесплатных моделей
         self.model = os.environ.get("AI_MODEL", "openrouter/free")
         self.available = bool(self.api_key)
         
@@ -35,7 +35,7 @@ class AIService:
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
-                        "HTTP-Referer": "https://family-bot-b4bd.onrender.com", # Укажите ваш URL
+                        "HTTP-Referer": "https://family-bot-b4bd.onrender.com",  # Замените на ваш URL
                         "X-Title": "Family Companion Bot"
                     },
                     json={
