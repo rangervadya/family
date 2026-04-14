@@ -7,9 +7,11 @@ logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
+        # Читаем API-ключ из переменных окружения
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = os.environ.get("AI_MODEL", "qwen/qwen3.6-plus-preview:free")  # бесплатная модель
+        # Используем бесплатную и мощную модель
+        self.model = os.environ.get("AI_MODEL", "qwen/qwen3.6-plus-preview:free")
         self.available = bool(self.api_key)
         
         if self.available:
@@ -18,10 +20,17 @@ class AIService:
             logger.warning("⚠️ AI Service disabled: OPENROUTER_API_KEY not set")
 
     async def generate_response(self, message: str, user_name: str = "друг") -> str:
+        """Генерация ответа через OpenRouter"""
         if not self.available:
             return self._fallback(message, user_name)
         
-        system_prompt = f"Ты — заботливый бот-компаньон «Семья». Общайся с пользователем по имени {user_name}. Отвечай тепло, дружелюбно, используй простые предложения. Отвечай на русском языке."
+        # Инструкция для нейросети, чтобы она вела себя как заботливый компаньон
+        system_prompt = (
+            f"Ты — заботливый бот-компаньон «Семья». "
+            f"Ты общаешься с {user_name}. Отвечай тепло, дружелюбно, используй простые предложения. "
+            f"Если тебя спрашивают о погоде, времени или других фактах — честно говори, что ты пока не знаешь, но порекомендуй использовать команды /weather или спросить время. "
+            f"Отвечай на русском языке, кратко (2-3 предложения)."
+        )
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -37,7 +46,7 @@ class AIService:
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": message}
                         ],
-                        "max_tokens": 500,
+                        "max_tokens": 300,
                         "temperature": 0.7
                     },
                     timeout=aiohttp.ClientTimeout(total=30)
@@ -46,13 +55,16 @@ class AIService:
                         data = await response.json()
                         return data["choices"][0]["message"]["content"]
                     else:
-                        logger.error(f"AI API error: {response.status}")
+                        error_text = await response.text()
+                        logger.error(f"AI API error {response.status}: {error_text}")
                         return self._fallback(message, user_name)
         except Exception as e:
             logger.error(f"AI request failed: {e}")
             return self._fallback(message, user_name)
     
     def _fallback(self, message: str, user_name: str) -> str:
+        """Простой ответ, если AI недоступен"""
         return f"Спасибо за сообщение, {user_name}! 😊 Я пока учусь отвечать на сложные вопросы, но обязательно отвечу позже."
 
+# Создаем глобальный экземпляр сервиса
 ai_service = AIService()
