@@ -1,181 +1,179 @@
-from __future__ import annotations
-
 import sqlite3
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from datetime import datetime
 
-DB_PATH = Path(__file__).with_name("family_bot.db")
-
-_conn: Optional[sqlite3.Connection] = None
-
-
-def get_conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-    return _conn
-
-
-def init_db() -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
+# ---------- Инициализация базы данных ----------
+def init_db():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    # Таблица пользователей
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
-            role TEXT NOT NULL,
             name TEXT,
             age INTEGER,
             city TEXT,
-            interests TEXT
+            interests TEXT,
+            role TEXT DEFAULT 'senior'
         )
-        """
-    )
-
-    cur.execute(
-        """
+    """)
+    # Таблица напоминаний
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            kind TEXT NOT NULL,          -- 'meds', 'doctor', 'water', ...
-            text TEXT NOT NULL,
-            time_local TEXT NOT NULL,    -- 'HH:MM'
-            enabled INTEGER NOT NULL DEFAULT 1
+            telegram_id INTEGER,
+            kind TEXT,
+            text TEXT,
+            time_local TEXT,
+            enabled INTEGER DEFAULT 1
         )
-        """
-    )
-
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS activity_log (
+    """)
+    # Таблица активностей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            kind TEXT NOT NULL,          -- 'talk', 'reminder_done', 'sos'
+            telegram_id INTEGER,
+            action TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
-
-    cur.execute(
-        """
+    """)
+    # Таблица родственных связей
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS relatives (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            senior_telegram_id INTEGER NOT NULL,
-            relative_telegram_id INTEGER NOT NULL
+            senior_id INTEGER,
+            relative_id INTEGER,
+            PRIMARY KEY (senior_id, relative_id)
         )
-        """
-    )
-
+    """)
+    # Новая таблица: история диалогов (для контекста AI)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)")
+    
     conn.commit()
+    conn.close()
 
 
-def upsert_user(
-    telegram_id: int,
-    role: str,
-    name: str | None,
-    age: int | None,
-    city: str | None,
-    interests: str | None,
-) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO users (telegram_id, role, name, age, city, interests)
+# ---------- Пользователи ----------
+def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO users (telegram_id, name, age, city, interests, role)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(telegram_id) DO UPDATE SET
-            role=excluded.role,
-            name=excluded.name,
-            age=excluded.age,
-            city=excluded.city,
-            interests=excluded.interests
-        """,
-        (telegram_id, role, name, age, city, interests),
-    )
+    """, (telegram_id, name, age, city, interests, role))
     conn.commit()
+    conn.close()
+
+def get_user(telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, age, city, interests, role FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
+    return None
 
 
-def list_reminders(telegram_id: int) -> List[Dict[str, Any]]:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, kind, text, time_local, enabled FROM reminders WHERE telegram_id=? ORDER BY time_local",
-        (telegram_id,),
-    )
-    return [dict(row) for row in cur.fetchall()]
-
-
-def add_reminder(
-    telegram_id: int,
-    kind: str,
-    text: str,
-    time_local: str,
-) -> int:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
+# ---------- Напоминания ----------
+def add_reminder(telegram_id, kind, text, time_local):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
         INSERT INTO reminders (telegram_id, kind, text, time_local)
         VALUES (?, ?, ?, ?)
-        """,
-        (telegram_id, kind, text, time_local),
+    """, (telegram_id, kind, text, time_local))
+    conn.commit()
+    conn.close()
+
+def list_reminders(telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, kind, text, time_local, enabled FROM reminders WHERE telegram_id = ?", (telegram_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
+
+
+# ---------- Активности ----------
+def log_activity(telegram_id, action):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO activities (telegram_id, action) VALUES (?, ?)", (telegram_id, action))
+    conn.commit()
+    conn.close()
+
+def get_activity_summary(telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'talk' AND created_at > datetime('now', '-1 day')", (telegram_id,))
+    talk = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-1 day')", (telegram_id,))
+    reminder_done = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-1 day')", (telegram_id,))
+    sos = cursor.fetchone()[0]
+    conn.close()
+    return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
+
+
+# ---------- Родственники ----------
+def add_relative_link(senior_telegram_id, relative_telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO relatives (senior_id, relative_id) VALUES (?, ?)", (senior_telegram_id, relative_telegram_id))
+    conn.commit()
+    conn.close()
+
+def get_relatives_for_senior(senior_telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (senior_telegram_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+# ---------- История диалогов (контекст для AI) ----------
+def save_message(user_id: int, role: str, message: str):
+    """Сохраняет сообщение в историю диалога."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO chat_history (user_id, role, message) VALUES (?, ?, ?)",
+        (user_id, role, message)
     )
     conn.commit()
-    return int(cur.lastrowid)
+    conn.close()
 
-
-def log_activity(telegram_id: int, kind: str) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO activity_log (telegram_id, kind) VALUES (?, ?)",
-        (telegram_id, kind),
+def get_chat_history(user_id: int, limit: int = 10) -> list:
+    """
+    Возвращает последние `limit` сообщений пользователя (все роли).
+    Возвращает список словарей: [{'role': 'user', 'content': ...}, ...]
+    """
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT role, message FROM chat_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit)
     )
+    rows = cursor.fetchall()
+    conn.close()
+    # Возвращаем в хронологическом порядке (от старых к новым)
+    history = [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+    return history
+
+def clear_chat_history(user_id: int):
+    """Очищает историю диалога пользователя."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
     conn.commit()
-
-
-def get_activity_summary(telegram_id: int) -> Dict[str, Any]:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT kind, COUNT(*) AS cnt
-        FROM activity_log
-        WHERE telegram_id = ?
-          AND created_at >= datetime('now', '-1 day')
-        GROUP BY kind
-        """,
-        (telegram_id,),
-    )
-    rows = cur.fetchall()
-    summary = {row["kind"]: row["cnt"] for row in rows}
-    return summary
-
-
-def add_relative_link(senior_telegram_id: int, relative_telegram_id: int) -> None:
-    """Создать связь «пожилой ↔ родственник» (простая версия без кодов)."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO relatives (senior_telegram_id, relative_telegram_id)
-        VALUES (?, ?)
-        """,
-        (senior_telegram_id, relative_telegram_id),
-    )
-    conn.commit()
-
-
-def get_relatives_for_senior(senior_telegram_id: int) -> List[int]:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT relative_telegram_id FROM relatives WHERE senior_telegram_id=?",
-        (senior_telegram_id,),
-    )
-    return [int(row[0]) for row in cur.fetchall()]
-
-
-
+    conn.close()
