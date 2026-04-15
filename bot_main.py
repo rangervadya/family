@@ -38,6 +38,10 @@ from storage import (
     get_activity_summary,
     add_relative_link,
     get_relatives_for_senior,
+    init_chat_history_table,
+    save_message,
+    get_chat_history,
+    clear_chat_history,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -70,16 +74,14 @@ def health_check():
     return "OK", 200
 
 def run_flask():
-    """Запуск Flask сервера для health checks"""
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# ==================== ОСТАЛЬНОЙ КОД БЕЗ ИЗМЕНЕНИЙ ====================
 
+# ==================== КОНСТАНТЫ ====================
 class Role(Enum):
     SENIOR = "senior"
     RELATIVE = "relative"
-
 
 class OnboardingState(Enum):
     CHOOSING_ROLE = auto()
@@ -89,6 +91,9 @@ class OnboardingState(Enum):
     SENIOR_INTERESTS = auto()
     RELATIVE_CODE = auto()
 
+class MedsState(Enum):
+    ASK_TIME = auto()
+    ASK_TEXT = auto()
 
 MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     [
@@ -100,6 +105,7 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
 )
 
 
+# ==================== ОНБОРДИНГ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     text = (
@@ -109,14 +115,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "➤ Я пожилой пользователь\n"
         "➤ Я родственник/опекун"
     )
-
     keyboard = [["Я пользователь", "Я родственник"]]
     await update.message.reply_text(
         text,
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
     )
     return OnboardingState.CHOOSING_ROLE.value
-
 
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip().lower()
@@ -128,8 +132,6 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             reply_markup=ReplyKeyboardRemove(),
         )
         return OnboardingState.RELATIVE_CODE.value
-
-    # По умолчанию считаем, что это пожилой пользователь
     context.user_data["role"] = Role.SENIOR.value
     await update.message.reply_text(
         "Рада знакомству! 🌷 Как вас зовут?\n\n"
@@ -137,7 +139,6 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         reply_markup=ReplyKeyboardRemove(),
     )
     return OnboardingState.SENIOR_NAME.value
-
 
 async def senior_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["name"] = (update.message.text or "").strip()
@@ -147,19 +148,14 @@ async def senior_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return OnboardingState.SENIOR_AGE.value
 
-
 async def senior_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip()
     if not text.isdigit():
         await update.message.reply_text("Пожалуйста, введите число (например, 72).")
         return OnboardingState.SENIOR_AGE.value
-
     context.user_data["age"] = int(text)
-    await update.message.reply_text(
-        "Спасибо!\n\nВ каком городе вы живёте?",
-    )
+    await update.message.reply_text("Спасибо!\n\nВ каком городе вы живёте?")
     return OnboardingState.SENIOR_CITY.value
-
 
 async def senior_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["city"] = (update.message.text or "").strip()
@@ -169,10 +165,8 @@ async def senior_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return OnboardingState.SENIOR_INTERESTS.value
 
-
 async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["interests"] = (update.message.text or "").strip()
-
     user = update.effective_user
     telegram_id = user.id if user else 0
     role = context.user_data.get("role", Role.SENIOR.value)
@@ -180,16 +174,7 @@ async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     age = context.user_data.get("age")
     city = context.user_data.get("city")
     interests = context.user_data.get("interests")
-
-    upsert_user(
-        telegram_id=telegram_id,
-        role=role,
-        name=name,
-        age=age,
-        city=city,
-        interests=interests,
-    )
-
+    upsert_user(telegram_id, role, name, age, city, interests)
     name_for_text = name or "друг"
     await update.message.reply_text(
         f"Спасибо, {name_for_text}! Я всё запомнила.\n\n"
@@ -200,22 +185,12 @@ async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     return ConversationHandler.END
 
-
 async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     code = (update.message.text or "").strip()
     context.user_data["relative_code"] = code
-
     user = update.effective_user
     telegram_id = user.id if user else 0
-    upsert_user(
-        telegram_id=telegram_id,
-        role=Role.RELATIVE.value,
-        name=user.first_name if user else None,
-        age=None,
-        city=None,
-        interests=None,
-    )
-
+    upsert_user(telegram_id, Role.RELATIVE.value, name=user.first_name if user else None)
     await update.message.reply_text(
         "Спасибо! На этом этапе мы считаем, что код принят.\n"
         "Позже здесь появится панель мониторинга для ваших близких.\n\n"
@@ -225,10 +200,9 @@ async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 
+# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
 async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик нажатий главного меню (MVP-версия)."""
     text = (update.message.text or "").strip()
-
     if text.startswith("💬"):
         await handle_talk(update, context)
     elif text.startswith("📅"):
@@ -242,28 +216,33 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif text.startswith("⚙️"):
         await handle_settings(update, context)
     else:
-        # Fallback — перенаправляем в AI-диалог как "умный собеседник"
         await handle_talk(update, context)
 
-
 async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Умный собеседник с вызовом AI-заглушки."""
+    """Умный собеседник с контекстом (историей диалога)."""
     user = update.effective_user
+    user_id = user.id if user else 0
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     last_text = (update.message.text or "").strip()
+
+    # Сохраняем сообщение пользователя в историю
+    if user_id:
+        save_message(user_id, "user", last_text)
 
     if user:
         log_activity(user.id, "talk")
 
-    reply = await generate_companion_reply(last_text, name=name)
+    reply = await generate_companion_reply(last_text, name=name, user_id=user_id)
     await update.message.reply_text(reply)
 
+    # Сохраняем ответ бота в историю
+    if user_id and reply:
+        save_message(user_id, "assistant", reply)
 
 async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     telegram_id = user.id if user else 0
     reminders = list_reminders(telegram_id)
-
     if not reminders:
         await update.message.reply_text(
             "У вас пока нет напоминаний.\n\n"
@@ -271,15 +250,12 @@ async def handle_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Отправьте команду /add_meds, чтобы добавить напоминание.",
         )
         return
-
     lines = ["Ваши напоминания:"]
     for r in reminders:
         status = "✅" if r["enabled"] else "⏸"
         lines.append(f"{status} {r['time_local']} — {r['text']}")
-
     lines.append("\nЧтобы добавить новое напоминание о лекарствах, отправьте /add_meds.")
     await update.message.reply_text("\n".join(lines))
-
 
 async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_events_overview())
@@ -289,16 +265,13 @@ async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• /volunteers — волонтёрская помощь (описание)",
     )
 
-
 async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user:
         log_activity(user.id, "sos")
-
     await update.message.reply_text(
         "Вы нажали SOS. Я зафиксировала это событие и, по возможности, уведомлю ваших близких.",
     )
-
     if user:
         relatives = get_relatives_for_senior(user.id)
         for rel_id in relatives:
@@ -311,27 +284,22 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         "Пожалуйста, свяжитесь с ним как можно скорее."
                     ),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Failed to notify relative %s about SOS: %s", rel_id, e)
-
 
 async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     telegram_id = user.id if user else 0
     summary = get_activity_summary(telegram_id)
-
     talk = summary.get("talk", 0)
     meds_done = summary.get("reminder_done", 0)
     sos = summary.get("sos", 0)
-
     lines = ["Дневник активности за последние 24 часа:"]
     lines.append(f"💬 Разговоры с ботом: {talk}")
     lines.append(f"💊 Выполненные напоминания (отметка «Принял(а)»): {meds_done}")
     lines.append(f"🆘 Нажатий SOS: {sos}")
     lines.append("\nПозже здесь появится общий семейный чат и подробная статистика для родственников.")
-
     await update.message.reply_text("\n".join(lines))
-
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -340,23 +308,15 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "Полезные команды:\n"
         "• /enable_checkin — ежедневно спрашивать «Как дела?»\n"
         "• /disable_checkin — отключить ежедневный вопрос\n"
-        "• /voice_help — рассказ о голосовом интерфейсе",
+        "• /voice_help — рассказ о голосовом интерфейсе\n"
+        "• /clear_history — очистить историю диалогов",
     )
 
-
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка произвольного текста — считаем, что это разговор с компаньоном."""
     await handle_talk(update, context)
 
 
-# ---------- Напоминания о лекарствах (простая настройка через команду) ----------
-
-
-class MedsState(Enum):
-    ASK_TIME = auto()
-    ASK_TEXT = auto()
-
-
+# ---------- Напоминания о лекарствах ----------
 async def add_meds_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Когда напоминать о приёме лекарств?\n"
@@ -365,19 +325,16 @@ async def add_meds_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     return MedsState.ASK_TIME.value
 
-
 async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.message.text or "").strip()
     parts = text.split(":")
     if len(parts) != 2 or not all(p.isdigit() for p in parts):
         await update.message.reply_text("Пожалуйста, введите время в формате ЧЧ:ММ, например 08:30.")
         return MedsState.ASK_TIME.value
-
     h, m = map(int, parts)
     if not (0 <= h <= 23 and 0 <= m <= 59):
         await update.message.reply_text("Часы от 00 до 23, минуты от 00 до 59. Попробуйте ещё раз.")
         return MedsState.ASK_TIME.value
-
     context.user_data["meds_time"] = f"{h:02d}:{m:02d}"
     await update.message.reply_text(
         "Что мне напоминать?\n"
@@ -385,36 +342,22 @@ async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return MedsState.ASK_TEXT.value
 
-
 async def meds_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
     chat_id = job.chat_id
     text = job.data.get("text", "Пора принять лекарство.")
     try:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"💊 Напоминание: {text}",
-        )
+        await context.bot.send_message(chat_id=chat_id, text=f"💊 Напоминание: {text}")
         log_activity(chat_id, "reminder_done")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("Failed to send meds reminder to %s: %s", chat_id, e)
-
 
 async def add_meds_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     telegram_id = user.id if user else 0
-
     meds_time = context.user_data.get("meds_time", "09:00")
     text = (update.message.text or "").strip() or "Принять лекарство"
-
-    add_reminder(
-        telegram_id=telegram_id,
-        kind="meds",
-        text=text,
-        time_local=meds_time,
-    )
-
-    # Зарегистрируем ежедневное напоминание в JobQueue (в рамках текущего запуска бота)
+    add_reminder(telegram_id, "meds", text, meds_time)
     job_queue: JobQueue = context.job_queue
     try:
         hours, minutes = map(int, meds_time.split(":"))
@@ -425,18 +368,14 @@ async def add_meds_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             name=f"meds-{telegram_id}-{meds_time}",
             data={"text": text},
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("Failed to schedule meds reminder for %s at %s: %s", telegram_id, meds_time, e)
-
     await update.message.reply_text(
         f"Хорошо, я буду каждый день в {meds_time} напоминать вам: «{text}».\n\n"
         "Вы всегда можете посмотреть список напоминаний через кнопку «📅 Напоминания».",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
-
-    # TODO: регистрация задач в JobQueue — отдельный шаг (можно добавить позже)
     return ConversationHandler.END
-
 
 async def meds_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
@@ -447,8 +386,6 @@ async def meds_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 # ---------- Ежедневная проверка «Как дела?» ----------
-
-
 async def daily_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
     chat_id = job.chat_id
@@ -458,57 +395,34 @@ async def daily_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
             text="Как вы себя сегодня чувствуете? 🌷\n"
             "Если всё в порядке, можете просто написать мне пару слов.",
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("Failed to send daily check-in to %s: %s", chat_id, e)
 
-
 async def enable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Включить ежедневный вопрос «Как дела?» (простая версия: каждый день в 10:00)."""
     chat_id = update.effective_chat.id
     job_queue: JobQueue = context.job_queue
-
-    # Удалим старые задания на всякий случай
-    current_jobs = job_queue.get_jobs_by_name(f"checkin-{chat_id}")
-    for job in current_jobs:
+    for job in job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
         job.schedule_removal()
-
     job_queue.run_daily(
         daily_checkin,
         time=time(hour=10, minute=0),
         chat_id=chat_id,
         name=f"checkin-{chat_id}",
     )
-
     await update.message.reply_text(
         "Хорошо, я буду каждый день в 10:00 спрашивать, как у вас дела. 🌞",
     )
 
-
 async def disable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     job_queue: JobQueue = context.job_queue
-    current_jobs = job_queue.get_jobs_by_name(f"checkin-{chat_id}")
-    for job in current_jobs:
+    for job in job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
         job.schedule_removal()
-
-    await update.message.reply_text(
-        "Ежедневный вопрос «Как дела?» отключен.",
-    )
+    await update.message.reply_text("Ежедневный вопрос «Как дела?» отключен.")
 
 
-async def voice_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(voice_interface_info())
-
-
-# ---------- Привязка родственника (простая админ-команда) ----------
-
-
+# ---------- Привязка родственника ----------
 async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Простая команда /add_relative <id_пожилого>.
-
-    Предполагаем, что команду вызывает родственник:
-    /add_relative 123456789
-    """
     user = update.effective_user
     if not context.args:
         await update.message.reply_text(
@@ -516,66 +430,59 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Например: /add_relative 123456789",
         )
         return
-
     try:
         senior_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("ID должен быть числом. Попробуйте ещё раз.")
         return
-
     if not user:
         await update.message.reply_text("Не удалось определить ваш Telegram ID.")
         return
-
-    add_relative_link(senior_telegram_id=senior_id, relative_telegram_id=user.id)
+    add_relative_link(senior_id, user.id)
     await update.message.reply_text(
         f"Готово. Я связала вас с пользователем с Telegram ID {senior_id}.\n"
         "Теперь при нажатии SOS ему я постараюсь отправить вам уведомление.",
     )
 
 
-# ---------- Дополнительные функции из ТЗ как отдельные команды ----------
-
-
+# ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
-
 
 async def volunteers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_volunteers_info())
 
-
 async def health_extra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(health_extra_info())
-
 
 async def helper_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(home_helper_info())
 
-
 async def games_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(games_menu_text())
-
 
 async def nostalgia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(nostalgia_menu_text())
 
-
 async def courses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(courses_menu_text())
-
 
 async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(achievements_text())
 
-
 async def admin_analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(analytics_info_text())
 
+async def voice_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(voice_interface_info())
 
-# ---------- Навигация / help ----------
+async def clear_history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    clear_chat_history(user_id)
+    await update.message.reply_text("🧹 История диалогов очищена!", reply_markup=MAIN_MENU_KEYBOARD)
 
 
+# ---------- Навигация ----------
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Я бот-компаньон «Семья».\n\n"
@@ -584,9 +491,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /menu — вернуть главное меню, если кнопки пропали.\n"
         "• /add_meds — добавить напоминание о лекарствах.\n"
         "• /weather — узнать погоду.\n"
-        "• /enable_checkin — каждый день спрашивать «Как дела?».",
+        "• /enable_checkin — каждый день спрашивать «Как дела?».\n"
+        "• /clear_history — очистить историю диалогов.",
     )
-
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -595,40 +502,36 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ---------- Погода (простая команда) ----------
-
-
+# ---------- Погода ----------
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     city = context.user_data.get("city")
-
     if not city:
         await update.message.reply_text(
             f"{name}, я пока не знаю ваш город.\n"
             "Пожалуйста, напишите мне: «Я живу в <город>», и мы добавим это в профиле.",
         )
         return
-
     summary = await get_weather_summary(city)
     if not summary:
         await update.message.reply_text(
             "Не получилось получить прогноз погоды сейчас. Попробуйте чуть позже.",
         )
         return
-
     await update.message.reply_text(
         f"Доброе утро, {name}!\n\n{summary}\n\n"
         "Пожалуйста, будьте осторожны и одевайтесь по погоде.",
     )
 
 
+# ==================== ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ====================
 def build_application():
     settings = get_settings()
     init_db()
+    init_chat_history_table()   # <-- инициализация таблицы истории
 
     builder = ApplicationBuilder().token(settings.telegram_token)
-    # Прокси и таймауты — если без них ConnectTimeout до api.telegram.org
     request = HTTPXRequest(
         connect_timeout=settings.telegram_connect_timeout,
         read_timeout=settings.telegram_read_timeout,
@@ -636,99 +539,70 @@ def build_application():
         proxy=settings.telegram_proxy,
     )
     builder = builder.request(request)
-
     application = builder.build()
 
+    # Онбординг
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            OnboardingState.CHOOSING_ROLE.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, choose_role)
-            ],
-            OnboardingState.SENIOR_NAME.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, senior_name)
-            ],
-            OnboardingState.SENIOR_AGE.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, senior_age)
-            ],
-            OnboardingState.SENIOR_CITY.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, senior_city)
-            ],
-            OnboardingState.SENIOR_INTERESTS.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, senior_interests)
-            ],
-            OnboardingState.RELATIVE_CODE.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, relative_code)
-            ],
+            OnboardingState.CHOOSING_ROLE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_role)],
+            OnboardingState.SENIOR_NAME.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, senior_name)],
+            OnboardingState.SENIOR_AGE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, senior_age)],
+            OnboardingState.SENIOR_CITY.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, senior_city)],
+            OnboardingState.SENIOR_INTERESTS.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, senior_interests)],
+            OnboardingState.RELATIVE_CODE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, relative_code)],
         },
         fallbacks=[],
     )
-
     application.add_handler(conv_handler)
 
-    # Настройка напоминаний о лекарствах
+    # Напоминания о лекарствах
     meds_conv = ConversationHandler(
         entry_points=[CommandHandler("add_meds", add_meds_start)],
         states={
-            MedsState.ASK_TIME.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_meds_time)
-            ],
-            MedsState.ASK_TEXT.value: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_meds_text)
-            ],
+            MedsState.ASK_TIME.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meds_time)],
+            MedsState.ASK_TEXT.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meds_text)],
         },
         fallbacks=[CommandHandler("cancel", meds_cancel)],
     )
     application.add_handler(meds_conv)
 
-    # Погода
+    # Основные команды
     application.add_handler(CommandHandler("weather", weather_command))
-
-    # Ежедневная проверка «Как дела?»
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
     application.add_handler(CommandHandler("disable_checkin", disable_checkin))
     application.add_handler(CommandHandler("voice_help", voice_help))
-
-    # Привязка родственника
     application.add_handler(CommandHandler("add_relative", add_relative_cmd))
-
-    # Социальный активатор и прочие функции ТЗ
-    application.add_handler(CommandHandler("companions", companions_cmd))
-    application.add_handler(CommandHandler("volunteers", volunteers_cmd))
-    application.add_handler(CommandHandler("health_more", health_extra_cmd))
-    application.add_handler(CommandHandler("helper", helper_cmd))
-    application.add_handler(CommandHandler("games", games_cmd))
-    application.add_handler(CommandHandler("nostalgia", nostalgia_cmd))
-    application.add_handler(CommandHandler("courses", courses_cmd))
-    application.add_handler(CommandHandler("achievements", achievements_cmd))
-    application.add_handler(CommandHandler("admin_stats", admin_analytics_cmd))
-
-    # Навигация
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("menu", menu_cmd))
+    application.add_handler(CommandHandler("clear_history", clear_history_cmd))
 
-    # Главное меню (после онбординга)
+    # Социальные и развлекательные команды
+    for cmd in [
+        companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
+        games_cmd, nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd
+    ]:
+        application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
+
+    # Главное меню
     application.add_handler(
         MessageHandler(
             filters.Regex("^(💬 Поговорить|📅 Напоминания|👥 События|🆘 ПОМОЩЬ|👨‍👩‍👧 Семья|⚙️ Настройки)$"),
             main_menu_router,
         )
     )
-
-    # Произвольный текст => разговор с компаньоном
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text)
-    )
+    # Произвольный текст -> разговор
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
 
     return application
 
 
+# ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
-    """Запуск Telegram бота с правильным event loop"""
+    """Запуск Telegram бота с правильным event loop."""
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
-        # Не логируем логин/пароль в URL прокси
         safe = settings.telegram_proxy
         if "@" in safe and "://" in safe:
             scheme, rest = safe.split("://", 1)
@@ -737,22 +611,16 @@ def run_telegram():
                 safe = f"{scheme}://***@{hostpart}"
         logger.info("Для Telegram используется прокси: %s", safe)
     else:
-        logger.warning(
-            "Прокси не задан (TELEGRAM_PROXY или HTTPS_PROXY). "
-            "Если видите TimedOut — включите VPN и укажите локальный HTTP/SOCKS-прокси в .env."
-        )
+        logger.warning("Прокси не задан (TELEGRAM_PROXY или HTTPS_PROXY). Если видите TimedOut — включите VPN и укажите локальный HTTP/SOCKS-прокси в .env.")
 
-    # Создаём новый event loop для этого потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     app = build_application()
-    
+
     async def start_bot():
         await app.initialize()
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        # Держим бота запущенным
         try:
             await asyncio.Event().wait()
         except KeyboardInterrupt:
@@ -760,7 +628,7 @@ def run_telegram():
         finally:
             await app.updater.stop()
             await app.shutdown()
-    
+
     try:
         loop.run_until_complete(start_bot())
     except (TimedOut, NetworkError) as exc:
@@ -783,14 +651,11 @@ def run_telegram():
         raise SystemExit(1) from exc
 
 
+# ==================== ГЛАВНАЯ ФУНКЦИЯ (FLASK + TELEGRAM) ====================
 def main():
-    """Запуск Flask (для health checks) и Telegram бота в разных потоках"""
-    # Запускаем Telegram бота в фоновом потоке
     tg_thread = threading.Thread(target=run_telegram, daemon=True)
     tg_thread.start()
     logger.info("Telegram бот запущен в фоновом потоке")
-    
-    # Запускаем Flask в основном потоке
     run_flask()
 
 
