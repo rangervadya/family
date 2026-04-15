@@ -1,7 +1,6 @@
 import sqlite3
 from datetime import datetime
 
-# ---------- Инициализация базы данных ----------
 def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -40,7 +39,13 @@ def init_db():
             PRIMARY KEY (senior_id, relative_id)
         )
     """)
-    # Таблица истории диалогов
+    conn.commit()
+    conn.close()
+
+def init_chat_history_table():
+    """Создаёт таблицу для истории диалогов."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +60,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ---------- Пользователи ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -76,14 +80,11 @@ def get_user(telegram_id):
         return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
     return None
 
-# ---------- Напоминания ----------
 def add_reminder(telegram_id, kind, text, time_local):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO reminders (telegram_id, kind, text, time_local)
-        VALUES (?, ?, ?, ?)
-    """, (telegram_id, kind, text, time_local))
+    cursor.execute("INSERT INTO reminders (telegram_id, kind, text, time_local) VALUES (?, ?, ?, ?)",
+                   (telegram_id, kind, text, time_local))
     conn.commit()
     conn.close()
 
@@ -95,7 +96,6 @@ def list_reminders(telegram_id):
     conn.close()
     return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
 
-# ---------- Активности ----------
 def log_activity(telegram_id, action):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -115,7 +115,6 @@ def get_activity_summary(telegram_id):
     conn.close()
     return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
 
-# ---------- Родственники ----------
 def add_relative_link(senior_telegram_id, relative_telegram_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -131,51 +130,23 @@ def get_relatives_for_senior(senior_telegram_id):
     conn.close()
     return [r[0] for r in rows]
 
-# ---------- История диалогов (контекст для AI) ----------
-def init_chat_history_table():
-    """Создаёт таблицу для истории диалогов, если её нет (вызывается при старте)."""
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chat_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)")
-    conn.commit()
-    conn.close()
-
 def save_message(user_id: int, role: str, message: str):
-    """Сохраняет сообщение в историю."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO chat_history (user_id, role, message) VALUES (?, ?, ?)",
-        (user_id, role, message)
-    )
+    cursor.execute("INSERT INTO chat_history (user_id, role, message) VALUES (?, ?, ?)", (user_id, role, message))
     conn.commit()
     conn.close()
 
 def get_chat_history(user_id: int, limit: int = 10) -> list:
-    """Возвращает последние `limit` сообщений пользователя в хронологическом порядке."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT role, message FROM chat_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-        (user_id, limit)
-    )
+    cursor.execute("SELECT role, message FROM chat_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
     history = [{"role": row[0], "content": row[1]} for row in reversed(rows)]
     return history
 
 def clear_chat_history(user_id: int):
-    """Очищает историю диалога пользователя."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
