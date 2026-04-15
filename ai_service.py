@@ -9,7 +9,7 @@ class AIService:
     def __init__(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "google/gemini-2.0-flash-exp:free"  # или openrouter/free
+        self.model = "openrouter/free"
         self.available = bool(self.api_key)
         if self.available:
             logger.info(f"✅ AI Service ready. Model: {self.model}")
