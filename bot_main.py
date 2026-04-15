@@ -219,23 +219,19 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await handle_talk(update, context)
 
 async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Умный собеседник с контекстом (историей диалога)."""
     user = update.effective_user
     user_id = user.id if user else 0
     name = context.user_data.get("name") or (user.first_name if user else "друг")
     last_text = (update.message.text or "").strip()
 
-    # Сохраняем сообщение пользователя в историю
     if user_id:
         save_message(user_id, "user", last_text)
-
     if user:
         log_activity(user.id, "talk")
 
     reply = await generate_companion_reply(last_text, name=name, user_id=user_id)
     await update.message.reply_text(reply)
 
-    # Сохраняем ответ бота в историю
     if user_id and reply:
         save_message(user_id, "assistant", reply)
 
@@ -529,7 +525,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def build_application():
     settings = get_settings()
     init_db()
-    init_chat_history_table()   # <-- инициализация таблицы истории
+    init_chat_history_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -599,7 +595,20 @@ def build_application():
 
 # ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
-    """Запуск Telegram бота с правильным event loop."""
+    """Запуск Telegram бота с правильным event loop и сбросом вебхука."""
+    import requests
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    # Сброс вебхука для предотвращения конфликта
+    try:
+        url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            logger.info("✅ Webhook deleted successfully")
+        else:
+            logger.warning(f"Failed to delete webhook: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error deleting webhook: {e}")
+
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
