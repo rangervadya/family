@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import datetime
 
+# ---------- Инициализация базы данных ----------
 def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -43,7 +44,7 @@ def init_db():
     conn.close()
 
 def init_chat_history_table():
-    """Создаёт таблицу для истории диалогов."""
+    """Создаёт таблицу для истории диалогов (контекст AI)."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -60,6 +61,28 @@ def init_chat_history_table():
     conn.commit()
     conn.close()
 
+def init_family_feed_table():
+    """Создаёт таблицу для семейной ленты (общего чата)."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS family_feed (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            author_name TEXT,
+            message TEXT NOT NULL,
+            message_type TEXT DEFAULT 'text',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_family_id ON family_feed(family_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_created_at ON family_feed(created_at)")
+    conn.commit()
+    conn.close()
+
+
+# ---------- Пользователи ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -80,6 +103,8 @@ def get_user(telegram_id):
         return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
     return None
 
+
+# ---------- Напоминания ----------
 def add_reminder(telegram_id, kind, text, time_local):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -96,6 +121,8 @@ def list_reminders(telegram_id):
     conn.close()
     return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
 
+
+# ---------- Активности ----------
 def log_activity(telegram_id, action):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -115,6 +142,8 @@ def get_activity_summary(telegram_id):
     conn.close()
     return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
 
+
+# ---------- Родственники ----------
 def add_relative_link(senior_telegram_id, relative_telegram_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -130,6 +159,8 @@ def get_relatives_for_senior(senior_telegram_id):
     conn.close()
     return [r[0] for r in rows]
 
+
+# ---------- История диалогов ----------
 def save_message(user_id: int, role: str, message: str):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -152,3 +183,60 @@ def clear_chat_history(user_id: int):
     cursor.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+
+# ---------- Семейная лента ----------
+def get_family_id_for_user(user_id: int) -> int:
+    """
+    Возвращает family_id (Telegram ID старшего пользователя) для данного пользователя.
+    Если пользователь – старший, его собственный ID и есть family_id.
+    Если родственник – ищем его связь со старшим.
+    """
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    # Проверяем, не является ли пользователь старшим
+    cursor.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if row and row[0] == "senior":
+        conn.close()
+        return user_id
+    # Ищем, к какому старшему привязан пользователь
+    cursor.execute("SELECT senior_id FROM relatives WHERE relative_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return None
+
+def add_to_family_feed(family_id: int, author_id: int, author_name: str, message: str, message_type: str = "text"):
+    """Добавляет сообщение в семейную ленту."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO family_feed (family_id, author_id, author_name, message, message_type)
+        VALUES (?, ?, ?, ?, ?)
+    """, (family_id, author_id, author_name, message, message_type))
+    conn.commit()
+    conn.close()
+
+def get_family_feed(family_id: int, limit: int = 20) -> list:
+    """Возвращает последние сообщения семейной ленты."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT author_name, message, message_type, created_at
+        FROM family_feed
+        WHERE family_id = ?
+        ORDER BY created_at DESC LIMIT ?
+    """, (family_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    feed = []
+    for row in reversed(rows):  # возвращаем в хронологическом порядке
+        feed.append({
+            "author_name": row[0],
+            "message": row[1],
+            "message_type": row[2],
+            "created_at": row[3]
+        })
+    return feed
