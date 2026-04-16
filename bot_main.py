@@ -5,9 +5,10 @@ import logging
 import sys
 import threading
 import asyncio
+import re
 from enum import Enum, auto
 from typing import Final
-from datetime import time
+from datetime import time, date, timedelta
 from flask import Flask
 
 from telegram import (
@@ -46,6 +47,12 @@ from storage import (
     get_family_id_for_user,
     add_to_family_feed,
     get_family_feed,
+    init_calendar_table,
+    add_event,
+    get_events_for_user,
+    get_event_by_id,
+    delete_event,
+    get_events_by_date,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -266,6 +273,22 @@ async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• /volunteers — волонтёрская помощь (описание)",
     )
 
+async def notify_family_members(family_id: int, exclude_user_id: int, bot, notification: str):
+    """Отправляет уведомление всем членам семьи (кроме исключённого)."""
+    import sqlite3
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+    relatives = [row[0] for row in cursor.fetchall()]
+    if family_id != exclude_user_id:
+        relatives.append(family_id)
+    conn.close()
+    for member_id in relatives:
+        try:
+            await bot.send_message(member_id, notification, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление {member_id}: {e}")
+
 async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user:
@@ -293,7 +316,6 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         family_id = get_family_id_for_user(user.id)
         if family_id:
             add_to_family_feed(family_id, user.id, user_name, "Нажата кнопка SOS!", "sos")
-            # Оповещаем всех членов семьи (кроме автора) через ленту
             notification = f"🚨 *{user_name}* нажал(а) SOS! Пожалуйста, проверьте семейную ленту."
             await notify_family_members(family_id, user.id, context.bot, notification)
 
@@ -321,7 +343,10 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• /voice_help — рассказ о голосовом интерфейсе\n"
         "• /clear_history — очистить историю диалогов\n"
         "• /family_send — отправить сообщение в семейный чат\n"
-        "• /family_feed — показать семейную ленту",
+        "• /family_feed — показать семейную ленту\n"
+        "• /add_event — добавить событие в календарь\n"
+        "• /events_list — список событий\n"
+        "• /delete_event — удалить событие",
     )
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -459,23 +484,7 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ---------- Семейная лента (общий чат) ----------
-async def notify_family_members(family_id: int, exclude_user_id: int, bot, notification: str):
-    """Отправляет уведомление всем членам семьи (кроме исключённого)."""
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
-    relatives = [row[0] for row in cursor.fetchall()]
-    if family_id != exclude_user_id:
-        relatives.append(family_id)
-    conn.close()
-    for member_id in relatives:
-        try:
-            await bot.send_message(member_id, notification, parse_mode="Markdown")
-        except Exception as e:
-            logger.warning(f"Не удалось отправить уведомление {member_id}: {e}")
-
 async def family_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет сообщение в семейную ленту (всем родственникам)."""
     user_id = update.effective_user.id
     user_name = context.user_data.get("name") or update.effective_user.first_name or "Член семьи"
     family_id = get_family_id_for_user(user_id)
@@ -496,9 +505,13 @@ async def family_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Сообщение отправлено в семейную ленту!")
 
 async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает последние сообщения семейной ленты."""
     user_id = update.effective_user.id
-    family_id = get_family_id_for_user(user_id)
+    try:
+        family_id = get_family_id_for_user(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка получения family_id: {e}")
+        await update.message.reply_text("❌ Ошибка базы данных. Попробуйте позже.")
+        return
     if not family_id:
         await update.message.reply_text("❌ Вы не привязаны ни к одной семье.")
         return
@@ -510,10 +523,121 @@ async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     lines = ["📋 *Семейная лента:*\n"]
     for entry in feed:
-        # created_at имеет вид "2025-04-15 20:30:45" или подобный
         time_str = str(entry["created_at"])[:16].replace("-", ".").replace("T", " ")
         lines.append(f"👤 *{entry['author_name']}* ({time_str}):\n{entry['message']}\n")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ---------- Календарь событий ----------
+async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📅 *Добавление события*\n\n"
+        "Введите дату в формате ГГГГ-ММ-ДД (например, 2025-12-31):",
+        parse_mode="Markdown"
+    )
+    return 1
+
+async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    date_str = update.message.text.strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        await update.message.reply_text("❌ Неверный формат. Используйте ГГГГ-ММ-ДД, например 2025-12-31.")
+        return 1
+    context.user_data["event_date"] = date_str
+    await update.message.reply_text("Введите время (опционально) в формате ЧЧ:ММ или '-' пропустить:")
+    return 2
+
+async def add_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    time_str = update.message.text.strip()
+    if time_str == "-":
+        context.user_data["event_time"] = None
+    elif not re.match(r'^\d{2}:\d{2}$', time_str):
+        await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ или '-' пропустить.")
+        return 2
+    else:
+        context.user_data["event_time"] = time_str
+    await update.message.reply_text("Введите название события (обязательно):")
+    return 3
+
+async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    title = update.message.text.strip()
+    if not title:
+        await update.message.reply_text("Название не может быть пустым. Введите название:")
+        return 3
+    context.user_data["event_title"] = title
+    await update.message.reply_text("Введите описание (необязательно, можно '-' пропустить):")
+    return 4
+
+async def add_event_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    desc = update.message.text.strip()
+    context.user_data["event_description"] = desc if desc != "-" else None
+    await update.message.reply_text("Выберите тип события:\n1 - День рождения\n2 - Праздник\n3 - Встреча\n4 - Другое")
+    return 5
+
+async def add_event_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    type_map = {"1": "birthday", "2": "holiday", "3": "meeting", "4": "other"}
+    choice = update.message.text.strip()
+    if choice not in type_map:
+        await update.message.reply_text("Пожалуйста, выберите 1, 2, 3 или 4.")
+        return 5
+    context.user_data["event_type"] = type_map[choice]
+    await update.message.reply_text("За сколько дней напомнить? (по умолчанию 1, введите число):")
+    return 6
+
+async def add_event_remind_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    days_str = update.message.text.strip()
+    if not days_str.isdigit():
+        days = 1
+    else:
+        days = int(days_str)
+    user_id = update.effective_user.id
+    add_event(
+        user_id=user_id,
+        event_date=context.user_data["event_date"],
+        title=context.user_data["event_title"],
+        description=context.user_data.get("event_description"),
+        event_time=context.user_data.get("event_time"),
+        event_type=context.user_data.get("event_type", "other"),
+        remind_before_days=days
+    )
+    await update.message.reply_text(
+        f"✅ Событие добавлено!\n\n📅 {context.user_data['event_date']}\n"
+        f"📌 {context.user_data['event_title']}\n"
+        f"🔔 Напомню за {days} дн.",
+        reply_markup=MAIN_MENU_KEYBOARD
+    )
+    context.user_data.clear()
+    return -1
+
+async def events_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    today = date.today().isoformat()
+    events = get_events_for_user(user_id, from_date=today, limit=20)
+    if not events:
+        await update.message.reply_text("📭 У вас нет предстоящих событий.")
+        return
+    lines = ["📅 *Ваши ближайшие события:*\n"]
+    for ev in events:
+        time_str = f" {ev['time']}" if ev['time'] else ""
+        lines.append(f"• {ev['date']}{time_str} – *{ev['title']}*")
+        if ev['description']:
+            lines.append(f"  _{ev['description']}_")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def delete_event_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Укажите ID события: /delete_event <id>")
+        return
+    try:
+        event_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом.")
+        return
+    user_id = update.effective_user.id
+    success = delete_event(event_id, user_id)
+    if success:
+        await update.message.reply_text(f"✅ Событие {event_id} удалено.")
+    else:
+        await update.message.reply_text("❌ Событие не найдено или у вас нет прав.")
 
 
 # ---------- Дополнительные команды ----------
@@ -566,7 +690,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /clear_history — очистить историю диалогов.\n"
         "• /family_send — отправить сообщение в семейный чат.\n"
         "• /family_feed — показать семейную ленту.\n"
-        "• /add_relative — привязать родственника.",
+        "• /add_relative — привязать родственника.\n"
+        "• /add_event — добавить событие в календарь.\n"
+        "• /events_list — список предстоящих событий.\n"
+        "• /delete_event — удалить событие.",
     )
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -605,6 +732,7 @@ def build_application():
     init_db()
     init_chat_history_table()
     init_family_feed_table()
+    init_calendar_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -642,6 +770,21 @@ def build_application():
     )
     application.add_handler(meds_conv)
 
+    # Календарь событий
+    event_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_event", add_event_start)],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
+            3: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_title)],
+            4: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_description)],
+            5: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_type)],
+            6: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_remind_days)],
+        },
+        fallbacks=[CommandHandler("cancel", meds_cancel)],
+    )
+    application.add_handler(event_conv)
+
     # Основные команды
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
@@ -655,6 +798,10 @@ def build_application():
     # Семейная лента
     application.add_handler(CommandHandler("family_send", family_send))
     application.add_handler(CommandHandler("family_feed", family_feed))
+
+    # Календарь
+    application.add_handler(CommandHandler("events_list", events_list))
+    application.add_handler(CommandHandler("delete_event", delete_event_cmd))
 
     # Социальные и развлекательные команды
     for cmd in [
@@ -673,12 +820,37 @@ def build_application():
     # Произвольный текст -> разговор
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
 
+    # Ежедневные напоминания о событиях (в 9:00)
+    job_queue = application.job_queue
+    if job_queue:
+        async def daily_event_reminder(context: ContextTypes.DEFAULT_TYPE):
+            today = date.today()
+            # События на сегодня
+            today_events = get_events_by_date(today.isoformat())
+            for ev in today_events:
+                time_msg = f" в {ev['time']}" if ev['time'] else ""
+                await context.bot.send_message(
+                    chat_id=ev['user_id'],
+                    text=f"🔔 *Напоминание о событии сегодня{time_msg}:*\n{ev['title']}\n{ev['description'] or ''}",
+                    parse_mode="Markdown"
+                )
+            # События завтра (напомнить за 1 день)
+            tomorrow = today + timedelta(days=1)
+            tomorrow_events = get_events_by_date(tomorrow.isoformat())
+            for ev in tomorrow_events:
+                if ev['remind_before_days'] >= 1:
+                    await context.bot.send_message(
+                        chat_id=ev['user_id'],
+                        text=f"📅 *Напоминание:* завтра событие «{ev['title']}».",
+                        parse_mode="Markdown"
+                    )
+        job_queue.run_daily(daily_event_reminder, time=time(hour=9, minute=0))
+
     return application
 
 
 # ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
-    """Запуск Telegram бота с правильным event loop."""
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
