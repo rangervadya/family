@@ -53,6 +53,13 @@ from storage import (
     get_event_by_id,
     delete_event,
     get_events_by_date,
+    # Аналитика
+    get_user_stats,
+    get_family_stats,
+    get_reminder_completion_rate,
+    generate_health_report,
+    generate_family_report,
+    get_user,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -274,7 +281,6 @@ async def handle_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 async def notify_family_members(family_id: int, exclude_user_id: int, bot, notification: str):
-    """Отправляет уведомление всем членам семьи (кроме исключённого)."""
     import sqlite3
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -298,7 +304,6 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
     if user:
         user_name = context.user_data.get("name") or user.first_name or "Родственник"
-        # Уведомляем родственников
         relatives = get_relatives_for_senior(user.id)
         for rel_id in relatives:
             try:
@@ -312,7 +317,6 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 )
             except Exception as e:
                 logger.warning("Failed to notify relative %s about SOS: %s", rel_id, e)
-        # Добавляем событие SOS в семейную ленту
         family_id = get_family_id_for_user(user.id)
         if family_id:
             add_to_family_feed(family_id, user.id, user_name, "Нажата кнопка SOS!", "sos")
@@ -346,7 +350,10 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• /family_feed — показать семейную ленту\n"
         "• /add_event — добавить событие в календарь\n"
         "• /events_list — список событий\n"
-        "• /delete_event — удалить событие",
+        "• /delete_event — удалить событие\n"
+        "• /health_report — мой отчёт о здоровье\n"
+        "• /family_report — сводный отчёт по семье\n"
+        "• /member_stats — статистика члена семьи",
     )
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -640,6 +647,87 @@ async def delete_event_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Событие не найдено или у вас нет прав.")
 
 
+# ---------- Аналитика и отчёты ----------
+async def health_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает персональный отчёт о здоровье пользователя."""
+    user_id = update.effective_user.id
+    days = 7
+    if context.args and context.args[0].isdigit():
+        days = int(context.args[0])
+        if days > 30:
+            days = 30
+    report = generate_health_report(user_id, days)
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+async def family_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает сводный отчёт по всей семье (только для родственников или старшего)."""
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье.")
+        return
+    
+    days = 7
+    if context.args and context.args[0].isdigit():
+        days = int(context.args[0])
+        if days > 30:
+            days = 30
+    
+    report = generate_family_report(family_id, days)
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику конкретного члена семьи (по ID)."""
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("📝 Использование: /member_stats <Telegram ID> [дни]")
+        return
+    
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом.")
+        return
+    
+    # Проверяем, является ли целевой пользователь членом семьи
+    import sqlite3
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM relatives WHERE senior_id = ? AND relative_id = ?", (family_id, target_id))
+    is_relative = cursor.fetchone() is not None
+    conn.close()
+    
+    if target_id != family_id and not is_relative:
+        await update.message.reply_text("❌ Этот пользователь не является членом вашей семьи.")
+        return
+    
+    days = 7
+    if len(context.args) > 1 and context.args[1].isdigit():
+        days = int(context.args[1])
+        if days > 30:
+            days = 30
+    
+    stats = get_user_stats(target_id, days)
+    user_info = get_user(target_id)
+    name = user_info["name"] if user_info else f"User_{target_id}"
+    
+    report = f"📊 *Статистика пользователя {name}* (ID: {target_id})\n"
+    report += f"📅 За последние {days} дней:\n\n"
+    report += f"💬 Разговоров: {stats['talks']}\n"
+    report += f"💊 Приёмов лекарств: {stats['reminders_done']}\n"
+    report += f"🆘 SOS: {stats['sos']}\n"
+    if stats['voice'] > 0:
+        report += f"🎤 Голосовых: {stats['voice']}\n"
+    report += f"\n🏆 *Всего активностей:* {stats['total']}"
+    
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+
 # ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
@@ -680,20 +768,45 @@ async def clear_history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ---------- Навигация ----------
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Я бот-компаньон «Семья».\n\n"
-        "Главные действия:\n"
-        "• Кнопки внизу экрана — поговорить, напоминания, события, SOS, семья, настройки.\n"
-        "• /menu — вернуть главное меню, если кнопки пропали.\n"
-        "• /add_meds — добавить напоминание о лекарствах.\n"
-        "• /weather — узнать погоду.\n"
-        "• /enable_checkin — каждый день спрашивать «Как дела?».\n"
-        "• /clear_history — очистить историю диалогов.\n"
-        "• /family_send — отправить сообщение в семейный чат.\n"
-        "• /family_feed — показать семейную ленту.\n"
-        "• /add_relative — привязать родственника.\n"
-        "• /add_event — добавить событие в календарь.\n"
-        "• /events_list — список предстоящих событий.\n"
-        "• /delete_event — удалить событие.",
+        "🤖 *Бот-компаньон «Семья»*\n\n"
+        "Основные команды:\n"
+        "• /start — начать заново\n"
+        "• /menu — главное меню\n"
+        "• /help — эта справка\n\n"
+        "💬 *Общение:*\n"
+        "• Просто напишите текст – я отвечу через нейросеть\n"
+        "• /voice_help — голосовые сообщения\n\n"
+        "📅 *Напоминания:*\n"
+        "• /add_meds — добавить напоминание о лекарствах\n"
+        "• /enable_checkin — ежедневный опрос «Как дела?»\n"
+        "• /disable_checkin — отключить опрос\n\n"
+        "👨‍👩‍👧 *Семья:*\n"
+        "• /add_relative <ID> — привязать родственника\n"
+        "• /family_send <текст> — отправить в семейный чат\n"
+        "• /family_feed — показать семейную ленту\n"
+        "• /sos — экстренная помощь\n\n"
+        "📊 *Аналитика:*\n"
+        "• /health_report [дни] — мой отчёт о здоровье\n"
+        "• /family_report [дни] — сводный отчёт по семье\n"
+        "• /member_stats <ID> [дни] — статистика члена семьи\n\n"
+        "📅 *Календарь:*\n"
+        "• /add_event — добавить событие\n"
+        "• /events_list — список событий\n"
+        "• /delete_event <id> — удалить событие\n\n"
+        "🌤️ *Погода:*\n"
+        "• /weather — погода (нужно указать город)\n"
+        "• Напишите «мой город Москва» – запомню\n\n"
+        "🆘 *Помощь:*\n"
+        "• /companions — поиск компаньонов\n"
+        "• /volunteers — волонтёрская помощь\n"
+        "• /health_extra — советы по здоровью\n"
+        "• /helper — помощь по дому\n"
+        "• /games — игры\n"
+        "• /nostalgia — ностальгия\n"
+        "• /courses — курсы\n"
+        "• /achievements — достижения\n"
+        "• /admin_stats — аналитика (для админов)",
+        parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD
     )
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -802,6 +915,11 @@ def build_application():
     # Календарь
     application.add_handler(CommandHandler("events_list", events_list))
     application.add_handler(CommandHandler("delete_event", delete_event_cmd))
+
+    # Аналитика
+    application.add_handler(CommandHandler("health_report", health_report))
+    application.add_handler(CommandHandler("family_report", family_report))
+    application.add_handler(CommandHandler("member_stats", member_stats))
 
     # Социальные и развлекательные команды
     for cmd in [
