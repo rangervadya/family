@@ -1,11 +1,11 @@
 import sqlite3
 from datetime import datetime
 
+# ---------- Инициализация основных таблиц ----------
 def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
-    # Таблица пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -17,7 +17,6 @@ def init_db():
         )
     """)
     
-    # Таблица напоминаний
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +28,6 @@ def init_db():
         )
     """)
     
-    # Таблица активностей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,14 +37,11 @@ def init_db():
         )
     """)
     
-    # Таблица родственников – ПРАВИЛЬНАЯ СТРУКТУРА
-    # Проверяем, существует ли таблица и какие в ней колонки
+    # Таблица relatives с правильной структурой (senior_id, relative_id)
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='relatives'")
     if cursor.fetchone():
-        # Получаем список колонок
         cursor.execute("PRAGMA table_info(relatives)")
         columns = [col[1] for col in cursor.fetchall()]
-        # Если структура не соответствует ожидаемой (senior_id, relative_id), удаляем и пересоздаём
         if 'senior_id' not in columns or 'relative_id' not in columns:
             cursor.execute("DROP TABLE relatives")
             cursor.execute("""
@@ -104,6 +99,29 @@ def init_family_feed_table():
     conn.commit()
     conn.close()
 
+def init_calendar_table():
+    """Создаёт таблицу для календаря событий (дни рождения, праздники, встречи)."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            event_date TEXT NOT NULL,
+            event_time TEXT,
+            title TEXT NOT NULL,
+            description TEXT,
+            event_type TEXT DEFAULT 'other',
+            remind_before_days INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
+    conn.commit()
+    conn.close()
+
+
 # ---------- Пользователи ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
     conn = sqlite3.connect("family_bot.db")
@@ -125,6 +143,7 @@ def get_user(telegram_id):
         return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
     return None
 
+
 # ---------- Напоминания ----------
 def add_reminder(telegram_id, kind, text, time_local):
     conn = sqlite3.connect("family_bot.db")
@@ -141,6 +160,7 @@ def list_reminders(telegram_id):
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
+
 
 # ---------- Активности ----------
 def log_activity(telegram_id, action):
@@ -162,6 +182,7 @@ def get_activity_summary(telegram_id):
     conn.close()
     return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
 
+
 # ---------- Родственники ----------
 def add_relative_link(senior_telegram_id, relative_telegram_id):
     conn = sqlite3.connect("family_bot.db")
@@ -178,6 +199,7 @@ def get_relatives_for_senior(senior_telegram_id):
     rows = cursor.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
 
 # ---------- История диалогов ----------
 def save_message(user_id: int, role: str, message: str):
@@ -203,18 +225,16 @@ def clear_chat_history(user_id: int):
     conn.commit()
     conn.close()
 
+
 # ---------- Семейная лента ----------
 def get_family_id_for_user(user_id: int) -> int:
-    """Возвращает family_id (Telegram ID старшего) для данного пользователя."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    # Проверяем, не является ли пользователь старшим
     cursor.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
     row = cursor.fetchone()
     if row and row[0] == "senior":
         conn.close()
         return user_id
-    # Ищем, к какому старшему привязан пользователь
     cursor.execute("SELECT senior_id FROM relatives WHERE relative_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
@@ -252,3 +272,102 @@ def get_family_feed(family_id: int, limit: int = 20) -> list:
             "created_at": row[3]
         })
     return feed
+
+
+# ---------- Календарь событий ----------
+def add_event(user_id: int, event_date: str, title: str, description: str = None,
+              event_time: str = None, event_type: str = "other", remind_before_days: int = 1) -> int:
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO calendar_events (user_id, event_date, event_time, title, description, event_type, remind_before_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, event_date, event_time, title, description, event_type, remind_before_days))
+    event_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return event_id
+
+def get_events_for_user(user_id: int, from_date: str = None, limit: int = 50) -> list:
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    if from_date:
+        cursor.execute("""
+            SELECT id, event_date, event_time, title, description, event_type, remind_before_days
+            FROM calendar_events
+            WHERE user_id = ? AND event_date >= ?
+            ORDER BY event_date ASC, event_time ASC
+            LIMIT ?
+        """, (user_id, from_date, limit))
+    else:
+        cursor.execute("""
+            SELECT id, event_date, event_time, title, description, event_type, remind_before_days
+            FROM calendar_events
+            WHERE user_id = ?
+            ORDER BY event_date ASC, event_time ASC
+            LIMIT ?
+        """, (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{
+        "id": r[0],
+        "date": r[1],
+        "time": r[2],
+        "title": r[3],
+        "description": r[4],
+        "type": r[5],
+        "remind_before_days": r[6]
+    } for r in rows]
+
+def get_event_by_id(event_id: int):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days
+        FROM calendar_events WHERE id = ?
+    """, (event_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "date": row[2],
+            "time": row[3],
+            "title": row[4],
+            "description": row[5],
+            "type": row[6],
+            "remind_before_days": row[7]
+        }
+    return None
+
+def delete_event(event_id: int, user_id: int) -> bool:
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM calendar_events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+def get_events_by_date(target_date: str) -> list:
+    """Возвращает события на конкретную дату (для ежедневных напоминаний)."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days
+        FROM calendar_events
+        WHERE event_date = ?
+    """, (target_date,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{
+        "id": r[0],
+        "user_id": r[1],
+        "date": r[2],
+        "time": r[3],
+        "title": r[4],
+        "description": r[5],
+        "type": r[6],
+        "remind_before_days": r[7]
+    } for r in rows]
