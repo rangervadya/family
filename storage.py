@@ -371,3 +371,155 @@ def get_events_by_date(target_date: str) -> list:
         "type": r[6],
         "remind_before_days": r[7]
     } for r in rows]
+
+
+# ---------- Аналитика и статистика ----------
+def get_user_stats(user_id: int, days: int = 7) -> dict:
+    """Возвращает статистику пользователя за последние N дней."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND action = 'talk' AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    talks = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    reminders_done = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    sos_count = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND action = 'voice' AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    voice_count = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    total_activities = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    return {
+        "talks": talks,
+        "reminders_done": reminders_done,
+        "sos": sos_count,
+        "voice": voice_count,
+        "total": total_activities,
+        "days": days
+    }
+
+def get_family_stats(family_id: int, days: int = 7) -> list:
+    """Возвращает статистику всех членов семьи (включая старшего)."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+    relatives = [row[0] for row in cursor.fetchall()]
+    if family_id not in relatives:
+        relatives.append(family_id)
+    
+    stats = []
+    for member_id in relatives:
+        cursor.execute("SELECT name FROM users WHERE telegram_id = ?", (member_id,))
+        name_row = cursor.fetchone()
+        member_name = name_row[0] if name_row else f"User_{member_id}"
+        
+        member_stats = get_user_stats(member_id, days)
+        member_stats["user_id"] = member_id
+        member_stats["name"] = member_name
+        stats.append(member_stats)
+    
+    conn.close()
+    return stats
+
+def get_reminder_completion_rate(user_id: int, days: int = 30) -> dict:
+    """
+    Возвращает процент выполнения напоминаний о лекарствах.
+    """
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM reminders
+        WHERE telegram_id = ? AND enabled = 1
+    """, (user_id,))
+    total_reminders = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM activities
+        WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')
+    """, (user_id, days))
+    completed = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    if total_reminders == 0:
+        rate = 100.0
+    else:
+        rate = (completed / (total_reminders * days)) * 100 if total_reminders > 0 else 0
+    
+    return {
+        "total_reminders": total_reminders,
+        "completed": completed,
+        "completion_rate": min(100, rate),
+        "days": days
+    }
+
+def generate_health_report(user_id: int, days: int = 7) -> str:
+    """Генерирует текстовый отчёт о здоровье пользователя."""
+    stats = get_user_stats(user_id, days)
+    reminder_stats = get_reminder_completion_rate(user_id, days)
+    
+    report = f"📊 *Отчёт о здоровье за {days} дней*\n\n"
+    report += f"💬 Разговоров с ботом: {stats['talks']}\n"
+    report += f"💊 Приёмов лекарств (выполнено): {stats['reminders_done']}\n"
+    if reminder_stats['total_reminders'] > 0:
+        report += f"📈 Процент выполнения: {reminder_stats['completion_rate']:.1f}%\n"
+    report += f"🆘 Нажатий SOS: {stats['sos']}\n"
+    if stats['voice'] > 0:
+        report += f"🎤 Голосовых сообщений: {stats['voice']}\n"
+    report += f"\n🏆 *Всего активностей:* {stats['total']}\n"
+    
+    if reminder_stats['completion_rate'] < 50:
+        report += "\n⚠️ *Рекомендация:* старайтесь не пропускать приём лекарств!"
+    if stats['talks'] == 0:
+        report += "\n💡 *Совет:* общайтесь с ботом – это поднимает настроение!"
+    
+    return report
+
+def generate_family_report(family_id: int, days: int = 7) -> str:
+    """Генерирует сводный отчёт по всей семье."""
+    members_stats = get_family_stats(family_id, days)
+    
+    report = f"👨‍👩‍👧 *Семейный отчёт за {days} дней*\n\n"
+    total_talks = 0
+    total_reminders = 0
+    total_sos = 0
+    
+    for m in members_stats:
+        report += f"👤 *{m['name']}*\n"
+        report += f"   💬 Разговоров: {m['talks']}\n"
+        report += f"   💊 Приёмов лекарств: {m['reminders_done']}\n"
+        report += f"   🆘 SOS: {m['sos']}\n\n"
+        total_talks += m['talks']
+        total_reminders += m['reminders_done']
+        total_sos += m['sos']
+    
+    report += f"📊 *Общая активность семьи:*\n"
+    report += f"   💬 Всего диалогов: {total_talks}\n"
+    report += f"   💊 Всего приёмов: {total_reminders}\n"
+    report += f"   🆘 Всего SOS: {total_sos}\n"
+    
+    return report
