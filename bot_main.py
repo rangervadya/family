@@ -42,6 +42,10 @@ from storage import (
     save_message,
     get_chat_history,
     clear_chat_history,
+    init_family_feed_table,
+    get_family_id_for_user,
+    add_to_family_feed,
+    get_family_feed,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -226,6 +230,7 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if user_id:
         save_message(user_id, "user", last_text)
+
     if user:
         log_activity(user.id, "talk")
 
@@ -269,6 +274,8 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "Вы нажали SOS. Я зафиксировала это событие и, по возможности, уведомлю ваших близких.",
     )
     if user:
+        user_name = context.user_data.get("name") or user.first_name or "Родственник"
+        # Уведомляем родственников
         relatives = get_relatives_for_senior(user.id)
         for rel_id in relatives:
             try:
@@ -282,6 +289,13 @@ async def handle_sos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 )
             except Exception as e:
                 logger.warning("Failed to notify relative %s about SOS: %s", rel_id, e)
+        # Добавляем событие SOS в семейную ленту
+        family_id = get_family_id_for_user(user.id)
+        if family_id:
+            add_to_family_feed(family_id, user.id, user_name, "Нажата кнопка SOS!", "sos")
+            # Оповещаем всех членов семьи (кроме автора) через ленту
+            notification = f"🚨 *{user_name}* нажал(а) SOS! Пожалуйста, проверьте семейную ленту."
+            await notify_family_members(family_id, user.id, context.bot, notification)
 
 async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -305,7 +319,9 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• /enable_checkin — ежедневно спрашивать «Как дела?»\n"
         "• /disable_checkin — отключить ежедневный вопрос\n"
         "• /voice_help — рассказ о голосовом интерфейсе\n"
-        "• /clear_history — очистить историю диалогов",
+        "• /clear_history — очистить историю диалогов\n"
+        "• /family_send — отправить сообщение в семейный чат\n"
+        "• /family_feed — показать семейную ленту",
     )
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -437,8 +453,67 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     add_relative_link(senior_id, user.id)
     await update.message.reply_text(
         f"Готово. Я связала вас с пользователем с Telegram ID {senior_id}.\n"
-        "Теперь при нажатии SOS ему я постараюсь отправить вам уведомление.",
+        "Теперь при нажатии SOS ему я постараюсь отправить вам уведомление.\n"
+        "Вы также можете отправлять сообщения в семейный чат через /family_send",
     )
+
+
+# ---------- Семейная лента (общий чат) ----------
+async def notify_family_members(family_id: int, exclude_user_id: int, bot, notification: str):
+    """Отправляет уведомление всем членам семьи (кроме исключённого)."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+    relatives = [row[0] for row in cursor.fetchall()]
+    if family_id != exclude_user_id:
+        relatives.append(family_id)
+    conn.close()
+    for member_id in relatives:
+        try:
+            await bot.send_message(member_id, notification, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление {member_id}: {e}")
+
+async def family_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет сообщение в семейную ленту (всем родственникам)."""
+    user_id = update.effective_user.id
+    user_name = context.user_data.get("name") or update.effective_user.first_name or "Член семьи"
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье. Используйте /add_relative.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("📝 Использование: /family_send <текст сообщения>")
+        return
+    message_text = " ".join(context.args)
+    
+    add_to_family_feed(family_id, user_id, user_name, message_text, "text")
+    
+    notification = f"📢 *{user_name}* пишет в семейный чат:\n\n{message_text}"
+    await notify_family_members(family_id, user_id, context.bot, notification)
+    
+    await update.message.reply_text("✅ Сообщение отправлено в семейную ленту!")
+
+async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает последние сообщения семейной ленты."""
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье.")
+        return
+    
+    feed = get_family_feed(family_id, limit=15)
+    if not feed:
+        await update.message.reply_text("📭 В семейной ленте пока нет сообщений.")
+        return
+    
+    lines = ["📋 *Семейная лента:*\n"]
+    for entry in feed:
+        # created_at имеет вид "2025-04-15 20:30:45" или подобный
+        time_str = str(entry["created_at"])[:16].replace("-", ".").replace("T", " ")
+        lines.append(f"👤 *{entry['author_name']}* ({time_str}):\n{entry['message']}\n")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 # ---------- Дополнительные команды ----------
@@ -488,7 +563,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /add_meds — добавить напоминание о лекарствах.\n"
         "• /weather — узнать погоду.\n"
         "• /enable_checkin — каждый день спрашивать «Как дела?».\n"
-        "• /clear_history — очистить историю диалогов.",
+        "• /clear_history — очистить историю диалогов.\n"
+        "• /family_send — отправить сообщение в семейный чат.\n"
+        "• /family_feed — показать семейную ленту.\n"
+        "• /add_relative — привязать родственника.",
     )
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -526,6 +604,7 @@ def build_application():
     settings = get_settings()
     init_db()
     init_chat_history_table()
+    init_family_feed_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -573,6 +652,10 @@ def build_application():
     application.add_handler(CommandHandler("menu", menu_cmd))
     application.add_handler(CommandHandler("clear_history", clear_history_cmd))
 
+    # Семейная лента
+    application.add_handler(CommandHandler("family_send", family_send))
+    application.add_handler(CommandHandler("family_feed", family_feed))
+
     # Социальные и развлекательные команды
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
@@ -595,20 +678,7 @@ def build_application():
 
 # ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
-    """Запуск Telegram бота с правильным event loop и сбросом вебхука."""
-    import requests
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    # Сброс вебхука для предотвращения конфликта
-    try:
-        url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
-        resp = requests.get(url)
-        if resp.status_code == 200:
-            logger.info("✅ Webhook deleted successfully")
-        else:
-            logger.warning(f"Failed to delete webhook: {resp.text}")
-    except Exception as e:
-        logger.warning(f"Error deleting webhook: {e}")
-
+    """Запуск Telegram бота с правильным event loop."""
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
     if settings.telegram_proxy:
