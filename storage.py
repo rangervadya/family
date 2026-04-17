@@ -100,7 +100,6 @@ def init_family_feed_table():
     conn.close()
 
 def init_calendar_table():
-    """Создаёт таблицу для календаря событий (дни рождения, праздники, встречи)."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -118,6 +117,20 @@ def init_calendar_table():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
+    conn.commit()
+    conn.close()
+
+def init_games_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games_state (
+            user_id INTEGER PRIMARY KEY,
+            game_name TEXT,
+            game_data TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -351,7 +364,6 @@ def delete_event(event_id: int, user_id: int) -> bool:
     return deleted
 
 def get_events_by_date(target_date: str) -> list:
-    """Возвращает события на конкретную дату (для ежедневных напоминаний)."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -375,7 +387,6 @@ def get_events_by_date(target_date: str) -> list:
 
 # ---------- Аналитика и статистика ----------
 def get_user_stats(user_id: int, days: int = 7) -> dict:
-    """Возвращает статистику пользователя за последние N дней."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
@@ -421,7 +432,6 @@ def get_user_stats(user_id: int, days: int = 7) -> dict:
     }
 
 def get_family_stats(family_id: int, days: int = 7) -> list:
-    """Возвращает статистику всех членов семьи (включая старшего)."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
@@ -445,9 +455,6 @@ def get_family_stats(family_id: int, days: int = 7) -> list:
     return stats
 
 def get_reminder_completion_rate(user_id: int, days: int = 30) -> dict:
-    """
-    Возвращает процент выполнения напоминаний о лекарствах.
-    """
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
@@ -478,7 +485,6 @@ def get_reminder_completion_rate(user_id: int, days: int = 30) -> dict:
     }
 
 def generate_health_report(user_id: int, days: int = 7) -> str:
-    """Генерирует текстовый отчёт о здоровье пользователя."""
     stats = get_user_stats(user_id, days)
     reminder_stats = get_reminder_completion_rate(user_id, days)
     
@@ -500,7 +506,6 @@ def generate_health_report(user_id: int, days: int = 7) -> str:
     return report
 
 def generate_family_report(family_id: int, days: int = 7) -> str:
-    """Генерирует сводный отчёт по всей семье."""
     members_stats = get_family_stats(family_id, days)
     
     report = f"👨‍👩‍👧 *Семейный отчёт за {days} дней*\n\n"
@@ -523,3 +528,32 @@ def generate_family_report(family_id: int, days: int = 7) -> str:
     report += f"   🆘 Всего SOS: {total_sos}\n"
     
     return report
+
+
+# ---------- Игры и викторины ----------
+def save_game_state(user_id: int, game_name: str, game_data: str):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO games_state (user_id, game_name, game_data, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    """, (user_id, game_name, game_data))
+    conn.commit()
+    conn.close()
+
+def get_game_state(user_id: int) -> dict:
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT game_name, game_data FROM games_state WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"game_name": row[0], "game_data": row[1]}
+    return None
+
+def clear_game_state(user_id: int):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM games_state WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
