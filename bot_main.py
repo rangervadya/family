@@ -6,6 +6,8 @@ import sys
 import threading
 import asyncio
 import re
+import json
+import random
 from enum import Enum, auto
 from typing import Final
 from datetime import time, date, timedelta
@@ -53,7 +55,10 @@ from storage import (
     get_event_by_id,
     delete_event,
     get_events_by_date,
-    # Аналитика
+    init_games_table,
+    save_game_state,
+    get_game_state,
+    clear_game_state,
     get_user_stats,
     get_family_stats,
     get_reminder_completion_rate,
@@ -118,6 +123,7 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
         ["💬 Поговорить", "📅 Напоминания"],
         ["👥 События", "🆘 ПОМОЩЬ"],
         ["👨‍👩‍👧 Семья", "⚙️ Настройки"],
+        ["🎮 Игры", "🌤️ Погода"],
     ],
     resize_keyboard=True,
 )
@@ -233,6 +239,10 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await handle_family(update, context)
     elif text.startswith("⚙️"):
         await handle_settings(update, context)
+    elif text.startswith("🎮"):
+        await games_menu(update, context)
+    elif text.startswith("🌤️"):
+        await weather_command(update, context)
     else:
         await handle_talk(update, context)
 
@@ -353,7 +363,8 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• /delete_event — удалить событие\n"
         "• /health_report — мой отчёт о здоровье\n"
         "• /family_report — сводный отчёт по семье\n"
-        "• /member_stats — статистика члена семьи",
+        "• /member_stats — статистика члена семьи\n"
+        "• /games — игры и викторины",
     )
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -649,7 +660,6 @@ async def delete_event_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- Аналитика и отчёты ----------
 async def health_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает персональный отчёт о здоровье пользователя."""
     user_id = update.effective_user.id
     days = 7
     if context.args and context.args[0].isdigit():
@@ -660,7 +670,6 @@ async def health_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 async def family_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает сводный отчёт по всей семье (только для родственников или старшего)."""
     user_id = update.effective_user.id
     family_id = get_family_id_for_user(user_id)
     if not family_id:
@@ -677,7 +686,6 @@ async def family_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает статистику конкретного члена семьи (по ID)."""
     user_id = update.effective_user.id
     family_id = get_family_id_for_user(user_id)
     if not family_id:
@@ -694,7 +702,6 @@ async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ID должен быть числом.")
         return
     
-    # Проверяем, является ли целевой пользователь членом семьи
     import sqlite3
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -728,6 +735,158 @@ async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 
+# ---------- Игры и викторины ----------
+# Загадки (вопрос, ответ)
+RIDDLES = [
+    ("Висит груша, нельзя скушать. Что это?", "лампочка"),
+    ("Не лает, не кусает, а в дом не пускает.", "замок"),
+    ("Без окон, без дверей, полна горница людей.", "огурец"),
+    ("Что можно приготовить, но нельзя съесть?", "урок"),
+    ("Чем больше из неё берёшь, тем больше она становится.", "яма"),
+    ("Кто говорит на всех языках?", "эхо"),
+    ("Зимой и летом одним цветом.", "ёлка"),
+    ("Сидит дед, в сто шуб одет. Кто его раздевает, тот слёзы проливает.", "лук"),
+    ("Что вниз головой растёт?", "сосулька"),
+    ("Не вода, не суша – на лодке не уплывёшь и ногами не пройдёшь.", "болото"),
+]
+
+# Вопросы для викторины "Правда или ложь"
+TRUTH_OR_LIE = [
+    ("Пингвины умеют летать.", False),
+    ("Верблюды хранят воду в горбах.", False),
+    ("Страусы прячут голову в песок.", False),
+    ("Лимон содержит больше сахара, чем клубника.", True),
+    ("Язык хамелеона длиннее его тела.", True),
+    ("Банан – это ягода.", True),
+    ("У осьминога три сердца.", True),
+    ("Шоколад ядовит для собак.", True),
+    ("Улитки могут спать три года.", True),
+    ("Стекло – это жидкое вещество.", False),
+]
+
+async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        ["🔮 Загадка", "📖 Слова"],
+        ["✅ Правда или ложь", "❌ Выйти из игры"]
+    ]
+    await update.message.reply_text(
+        "🎮 *Игры и викторины*\n\nВыберите игру:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode="Markdown"
+    )
+
+async def play_riddle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    riddle = random.choice(RIDDLES)
+    save_game_state(user_id, "riddle", json.dumps({"question": riddle[0], "answer": riddle[1]}))
+    await update.message.reply_text(
+        f"🔮 *Загадка:*\n\n{riddle[0]}\n\nНапишите свой ответ:",
+        parse_mode="Markdown"
+    )
+
+async def play_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    save_game_state(user_id, "words", json.dumps({"last_letter": None, "used_words": []}))
+    await update.message.reply_text(
+        "📖 *Игра «Слова»*\n\n"
+        "Правила: называете слово, следующий игрок называет слово на последнюю букву предыдущего.\n"
+        "Вы начинаете! Напишите любое слово (существительное, именительный падеж).",
+        parse_mode="Markdown"
+    )
+
+async def play_truth_or_lie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    question, answer = random.choice(TRUTH_OR_LIE)
+    save_game_state(user_id, "truth_or_lie", json.dumps({"question": question, "answer": answer}))
+    await update.message.reply_text(
+        f"✅ *Правда или ложь?*\n\n{question}\n\nОтправьте «правда» или «ложь»:",
+        parse_mode="Markdown"
+    )
+
+async def exit_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    clear_game_state(user_id)
+    await update.message.reply_text(
+        "❌ Вы вышли из игры. Возвращайтесь ещё!",
+        reply_markup=MAIN_MENU_KEYBOARD
+    )
+
+def find_word_on_letter(letter: str, used_words: set) -> str:
+    words_db = ["апельсин", "банан", "вишня", "груша", "дыня", "ежевика", "жёлудь", "земляника", "ирис", "йогурт",
+                "клубника", "лимон", "малина", "ноутбук", "обезьяна", "помидор", "рис", "самолёт", "телефон", "улитка",
+                "фонарь", "хлеб", "цветок", "чайник", "шапка", "щёголь", "эскимо", "юбка", "яблоко"]
+    for word in words_db:
+        if word[0] == letter and word not in used_words:
+            return word
+    return None
+
+async def handle_game_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = get_game_state(user_id)
+    if not state:
+        return
+    
+    game_name = state["game_name"]
+    game_data = json.loads(state["game_data"])
+    answer = update.message.text.strip().lower()
+    
+    if game_name == "riddle":
+        correct_answer = game_data["answer"]
+        if answer == correct_answer or answer in correct_answer:
+            await update.message.reply_text("🎉 Правильно! Отличная работа!\n\nЧтобы сыграть ещё раз, нажмите /games", reply_markup=MAIN_MENU_KEYBOARD)
+        else:
+            await update.message.reply_text(f"❌ Неправильно! Правильный ответ: {correct_answer}\n\nСыграйте ещё раз: /games", reply_markup=MAIN_MENU_KEYBOARD)
+        clear_game_state(user_id)
+    
+    elif game_name == "words":
+        last_letter = game_data.get("last_letter")
+        used_words = set(game_data.get("used_words", []))
+        
+        if answer in used_words:
+            await update.message.reply_text(f"❌ Слово «{answer}» уже было! Вы проиграли. Начните новую игру: /games")
+            clear_game_state(user_id)
+            return
+        
+        if last_letter and answer[0] != last_letter:
+            await update.message.reply_text(f"❌ Слово должно начинаться на букву «{last_letter}»! Вы проиграли. Начните новую игру: /games")
+            clear_game_state(user_id)
+            return
+        
+        if len(answer) < 2:
+            await update.message.reply_text(f"❌ Слишком короткое слово! Вы проиграли. Начните новую игру: /games")
+            clear_game_state(user_id)
+            return
+        
+        used_words.add(answer)
+        last_letter = answer[-1]
+        save_game_state(user_id, "words", json.dumps({"last_letter": last_letter, "used_words": list(used_words)}))
+        
+        bot_word = find_word_on_letter(last_letter, used_words)
+        if bot_word:
+            used_words.add(bot_word)
+            new_last_letter = bot_word[-1]
+            save_game_state(user_id, "words", json.dumps({"last_letter": new_last_letter, "used_words": list(used_words)}))
+            await update.message.reply_text(f"🤖 Моё слово: {bot_word}\nТеперь ваша очередь на букву «{new_last_letter}».")
+        else:
+            await update.message.reply_text(f"🎉 Я не могу найти слово на букву «{last_letter}»! Вы победили! Поздравляю!\n\nНачать новую игру: /games")
+            clear_game_state(user_id)
+    
+    elif game_name == "truth_or_lie":
+        is_true = answer in ["правда", "верно", "да", "true", "truth"]
+        is_false = answer in ["ложь", "неправда", "нет", "false", "lie"]
+        
+        if not (is_true or is_false):
+            await update.message.reply_text("Пожалуйста, ответьте «правда» или «ложь».")
+            return
+        
+        correct = game_data["answer"]
+        if (is_true and correct) or (is_false and not correct):
+            await update.message.reply_text("🎉 Правильно! Отличная эрудиция!\n\nСыграть ещё: /games", reply_markup=MAIN_MENU_KEYBOARD)
+        else:
+            await update.message.reply_text(f"❌ Неправильно! {game_data['question']} – это {'правда' if correct else 'ложь'}.\n\nСыграть ещё: /games", reply_markup=MAIN_MENU_KEYBOARD)
+        clear_game_state(user_id)
+
+
 # ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
@@ -740,9 +899,6 @@ async def health_extra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def helper_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(home_helper_info())
-
-async def games_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(games_menu_text())
 
 async def nostalgia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(nostalgia_menu_text())
@@ -793,6 +949,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /add_event — добавить событие\n"
         "• /events_list — список событий\n"
         "• /delete_event <id> — удалить событие\n\n"
+        "🎮 *Игры:*\n"
+        "• /games — меню игр (загадки, слова, правда/ложь)\n\n"
         "🌤️ *Погода:*\n"
         "• /weather — погода (нужно указать город)\n"
         "• Напишите «мой город Москва» – запомню\n\n"
@@ -801,7 +959,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /volunteers — волонтёрская помощь\n"
         "• /health_extra — советы по здоровью\n"
         "• /helper — помощь по дому\n"
-        "• /games — игры\n"
         "• /nostalgia — ностальгия\n"
         "• /courses — курсы\n"
         "• /achievements — достижения\n"
@@ -846,6 +1003,7 @@ def build_application():
     init_chat_history_table()
     init_family_feed_table()
     init_calendar_table()
+    init_games_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -921,17 +1079,25 @@ def build_application():
     application.add_handler(CommandHandler("family_report", family_report))
     application.add_handler(CommandHandler("member_stats", member_stats))
 
+    # Игры
+    application.add_handler(CommandHandler("games", games_menu))
+    application.add_handler(MessageHandler(filters.Regex("^🔮 Загадка$"), play_riddle))
+    application.add_handler(MessageHandler(filters.Regex("^📖 Слова$"), play_words))
+    application.add_handler(MessageHandler(filters.Regex("^✅ Правда или ложь$"), play_truth_or_lie))
+    application.add_handler(MessageHandler(filters.Regex("^❌ Выйти из игры$"), exit_game))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer))
+
     # Социальные и развлекательные команды
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
-        games_cmd, nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd
+        nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd
     ]:
         application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
 
     # Главное меню
     application.add_handler(
         MessageHandler(
-            filters.Regex("^(💬 Поговорить|📅 Напоминания|👥 События|🆘 ПОМОЩЬ|👨‍👩‍👧 Семья|⚙️ Настройки)$"),
+            filters.Regex("^(💬 Поговорить|📅 Напоминания|👥 События|🆘 ПОМОЩЬ|👨‍👩‍👧 Семья|⚙️ Настройки|🎮 Игры|🌤️ Погода)$"),
             main_menu_router,
         )
     )
@@ -943,7 +1109,6 @@ def build_application():
     if job_queue:
         async def daily_event_reminder(context: ContextTypes.DEFAULT_TYPE):
             today = date.today()
-            # События на сегодня
             today_events = get_events_by_date(today.isoformat())
             for ev in today_events:
                 time_msg = f" в {ev['time']}" if ev['time'] else ""
@@ -952,7 +1117,6 @@ def build_application():
                     text=f"🔔 *Напоминание о событии сегодня{time_msg}:*\n{ev['title']}\n{ev['description'] or ''}",
                     parse_mode="Markdown"
                 )
-            # События завтра (напомнить за 1 день)
             tomorrow = today + timedelta(days=1)
             tomorrow_events = get_events_by_date(tomorrow.isoformat())
             for ev in tomorrow_events:
