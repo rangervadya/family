@@ -66,6 +66,9 @@ from storage import (
     generate_health_report,
     generate_family_report,
     get_user,
+    init_media_table,
+    save_media,
+    get_family_media,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -129,6 +132,7 @@ MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
         ["👥 События", "🆘 ПОМОЩЬ"],
         ["👨‍👩‍👧 Семья", "⚙️ Настройки"],
         ["🎮 Игры", "🌤️ Погода"],
+        ["📸 Альбом", "❓ Помощь"],
     ],
     resize_keyboard=True,
 )
@@ -249,6 +253,10 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await games_menu(update, context)
     elif text == "🌤️ Погода":
         await weather_command(update, context)
+    elif text == "📸 Альбом":
+        await show_album(update, context)
+    elif text == "❓ Помощь":
+        await help_cmd(update, context)
     else:
         await handle_talk(update, context)
 
@@ -370,7 +378,8 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• /health_report — мой отчёт о здоровье\n"
         "• /family_report — сводный отчёт по семье\n"
         "• /member_stats — статистика члена семьи\n"
-        "• /games — игры и викторины",
+        "• /games — игры и викторины\n"
+        "• /album — семейный альбом",
     )
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -904,7 +913,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await context.bot.get_file(update.message.voice.file_id)
         audio_bytes = await file.download_as_bytearray()
         
-        # Конвертация OGG -> WAV
         audio = AudioSegment.from_ogg(io.BytesIO(audio_bytes))
         audio = audio.set_channels(1).set_frame_rate(16000)
         wav_io = io.BytesIO()
@@ -957,6 +965,61 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Пожалуйста, попробуйте ещё раз или напишите текстом.",
             reply_markup=MAIN_MENU_KEYBOARD
         )
+
+
+# ---------- Медиафайлы (фото, видео, альбом) ----------
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    user_name = context.user_data.get("name") or user.first_name or "Пользователь"
+    
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье. Используйте /add_relative.")
+        return
+    
+    photo = update.message.photo[-1]
+    caption = update.message.caption or ""
+    
+    save_media(family_id, user_id, user_name, "photo", photo.file_id, caption)
+    await update.message.reply_text("📸 Фото добавлено в семейный альбом!")
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    user_name = context.user_data.get("name") or user.first_name or "Пользователь"
+    
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье. Используйте /add_relative.")
+        return
+    
+    video = update.message.video
+    caption = update.message.caption or ""
+    
+    save_media(family_id, user_id, user_name, "video", video.file_id, caption)
+    await update.message.reply_text("🎥 Видео добавлено в семейный альбом!")
+
+async def show_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text("❌ Вы не привязаны ни к одной семье.")
+        return
+    
+    media_list = get_family_media(family_id, limit=10)
+    if not media_list:
+        await update.message.reply_text("📭 В семейном альбоме пока нет фотографий или видео.")
+        return
+    
+    for media in media_list:
+        caption = f"📅 {str(media['date'])[:16]}\n👤 {media['author']}"
+        if media['caption']:
+            caption += f"\n💬 {media['caption']}"
+        if media['type'] == 'photo':
+            await update.message.reply_photo(photo=media['file_id'], caption=caption)
+        else:
+            await update.message.reply_video(video=media['file_id'], caption=caption)
 
 
 # ---------- Дополнительные команды ----------
@@ -1023,6 +1086,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /delete_event <id> — удалить событие\n\n"
         "🎮 *Игры:*\n"
         "• /games — меню игр (загадки, слова, правда/ложь)\n\n"
+        "📸 *Альбом:*\n"
+        "• /album — показать семейный альбом\n"
+        "• Отправьте фото или видео – они сохранятся в альбом\n\n"
         "🌤️ *Погода:*\n"
         "• /weather — погода (нужно указать город)\n"
         "• Напишите «мой город Москва» – запомню\n\n"
@@ -1076,6 +1142,7 @@ def build_application():
     init_family_feed_table()
     init_calendar_table()
     init_games_table()
+    init_media_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -1151,8 +1218,12 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex("^❌ Выйти из игры$"), exit_game))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
 
-    # Голосовые сообщения
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    # Медиафайлы
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    application.add_handler(CommandHandler("album", show_album))
 
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
