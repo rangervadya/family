@@ -225,23 +225,25 @@ async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 # ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
-async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (update.message.text or "").strip()
-    if text.startswith("💬"):
+async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Простой маршрутизатор по тексту кнопок."""
+    text = update.message.text
+    logger.info(f"🖲️ Нажата кнопка: {text}")
+    if text == "💬 Поговорить":
         await handle_talk(update, context)
-    elif text.startswith("📅"):
+    elif text == "📅 Напоминания":
         await handle_reminders(update, context)
-    elif text.startswith("👥"):
+    elif text == "👥 События":
         await handle_events(update, context)
-    elif text.startswith("🆘"):
+    elif text == "🆘 ПОМОЩЬ":
         await handle_sos(update, context)
-    elif text.startswith("👨‍👩‍👧"):
+    elif text == "👨‍👩‍👧 Семья":
         await handle_family(update, context)
-    elif text.startswith("⚙️"):
+    elif text == "⚙️ Настройки":
         await handle_settings(update, context)
-    elif text.startswith("🎮"):
+    elif text == "🎮 Игры":
         await games_menu(update, context)
-    elif text.startswith("🌤️"):
+    elif text == "🌤️ Погода":
         await weather_command(update, context)
     else:
         await handle_talk(update, context)
@@ -736,7 +738,6 @@ async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------- Игры и викторины ----------
-# Загадки (вопрос, ответ)
 RIDDLES = [
     ("Висит груша, нельзя скушать. Что это?", "лампочка"),
     ("Не лает, не кусает, а в дом не пускает.", "замок"),
@@ -750,7 +751,6 @@ RIDDLES = [
     ("Не вода, не суша – на лодке не уплывёшь и ногами не пройдёшь.", "болото"),
 ]
 
-# Вопросы для викторины "Правда или ложь"
 TRUTH_OR_LIE = [
     ("Пингвины умеют летать.", False),
     ("Верблюды хранят воду в горбах.", False),
@@ -825,7 +825,6 @@ async def handle_game_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     state = get_game_state(user_id)
     if not state:
         return
-    
     game_name = state["game_name"]
     game_data = json.loads(state["game_data"])
     answer = update.message.text.strip().lower()
@@ -1015,7 +1014,6 @@ def build_application():
     builder = builder.request(request)
     application = builder.build()
 
-    # Онбординг
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -1030,7 +1028,6 @@ def build_application():
     )
     application.add_handler(conv_handler)
 
-    # Напоминания о лекарствах
     meds_conv = ConversationHandler(
         entry_points=[CommandHandler("add_meds", add_meds_start)],
         states={
@@ -1041,7 +1038,6 @@ def build_application():
     )
     application.add_handler(meds_conv)
 
-    # Календарь событий
     event_conv = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event_start)],
         states={
@@ -1056,7 +1052,6 @@ def build_application():
     )
     application.add_handler(event_conv)
 
-    # Основные команды
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
     application.add_handler(CommandHandler("disable_checkin", disable_checkin))
@@ -1066,45 +1061,32 @@ def build_application():
     application.add_handler(CommandHandler("menu", menu_cmd))
     application.add_handler(CommandHandler("clear_history", clear_history_cmd))
 
-    # Семейная лента
     application.add_handler(CommandHandler("family_send", family_send))
     application.add_handler(CommandHandler("family_feed", family_feed))
 
-    # Календарь
     application.add_handler(CommandHandler("events_list", events_list))
     application.add_handler(CommandHandler("delete_event", delete_event_cmd))
 
-    # Аналитика
     application.add_handler(CommandHandler("health_report", health_report))
     application.add_handler(CommandHandler("family_report", family_report))
     application.add_handler(CommandHandler("member_stats", member_stats))
 
-    # Игры
     application.add_handler(CommandHandler("games", games_menu))
     application.add_handler(MessageHandler(filters.Regex("^🔮 Загадка$"), play_riddle))
     application.add_handler(MessageHandler(filters.Regex("^📖 Слова$"), play_words))
     application.add_handler(MessageHandler(filters.Regex("^✅ Правда или ложь$"), play_truth_or_lie))
     application.add_handler(MessageHandler(filters.Regex("^❌ Выйти из игры$"), exit_game))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
 
-    # Социальные и развлекательные команды
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
         nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd
     ]:
         application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
 
-    # Главное меню
-    application.add_handler(
-        MessageHandler(
-            filters.Regex("^(💬 Поговорить|📅 Напоминания|👥 События|🆘 ПОМОЩЬ|👨‍👩‍👧 Семья|⚙️ Настройки|🎮 Игры|🌤️ Погода)$"),
-            main_menu_router,
-        )
-    )
-    # Произвольный текст -> разговор
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text), group=3)
 
-    # Ежедневные напоминания о событиях (в 9:00)
     job_queue = application.job_queue
     if job_queue:
         async def daily_event_reminder(context: ContextTypes.DEFAULT_TYPE):
@@ -1131,7 +1113,6 @@ def build_application():
     return application
 
 
-# ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
@@ -1184,7 +1165,6 @@ def run_telegram():
         raise SystemExit(1) from exc
 
 
-# ==================== ГЛАВНАЯ ФУНКЦИЯ (FLASK + TELEGRAM) ====================
 def main():
     tg_thread = threading.Thread(target=run_telegram, daemon=True)
     tg_thread.start()
