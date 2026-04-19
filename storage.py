@@ -134,6 +134,26 @@ def init_games_table():
     conn.commit()
     conn.close()
 
+def init_media_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS media_albums (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            author_name TEXT,
+            file_type TEXT NOT NULL,  -- 'photo', 'video'
+            file_id TEXT NOT NULL,
+            caption TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_family_id ON media_albums(family_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_created_at ON media_albums(created_at)")
+    conn.commit()
+    conn.close()
+
 
 # ---------- Пользователи ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
@@ -557,3 +577,38 @@ def clear_game_state(user_id: int):
     cursor.execute("DELETE FROM games_state WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+
+# ---------- Медиафайлы и альбомы ----------
+def save_media(family_id: int, author_id: int, author_name: str, file_type: str, file_id: str, caption: str = None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO media_albums (family_id, author_id, author_name, file_type, file_id, caption)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (family_id, author_id, author_name, file_type, file_id, caption))
+    conn.commit()
+    conn.close()
+
+def get_family_media(family_id: int, limit: int = 20) -> list:
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, author_name, file_type, file_id, caption, created_at
+        FROM media_albums
+        WHERE family_id = ?
+        ORDER BY created_at DESC LIMIT ?
+    """, (family_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    media_list = []
+    for row in reversed(rows):
+        media_list.append({
+            "id": row[0],
+            "author": row[1],
+            "type": row[2],
+            "file_id": row[3],
+            "caption": row[4],
+            "date": row[5]
+        })
+    return media_list
