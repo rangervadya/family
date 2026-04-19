@@ -106,6 +106,7 @@ def init_calendar_table():
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            target_user_id INTEGER,
             event_date TEXT NOT NULL,
             event_time TEXT,
             title TEXT NOT NULL,
@@ -115,6 +116,11 @@ def init_calendar_table():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Добавляем колонку target_user_id, если её нет (миграция)
+    cursor.execute("PRAGMA table_info(calendar_events)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'target_user_id' not in columns:
+        cursor.execute("ALTER TABLE calendar_events ADD COLUMN target_user_id INTEGER")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
     conn.commit()
@@ -307,15 +313,16 @@ def get_family_feed(family_id: int, limit: int = 20) -> list:
     return feed
 
 
-# ---------- Календарь событий ----------
+# ---------- Календарь событий (с поддержкой дней рождений) ----------
 def add_event(user_id: int, event_date: str, title: str, description: str = None,
-              event_time: str = None, event_type: str = "other", remind_before_days: int = 1) -> int:
+              event_time: str = None, event_type: str = "other", remind_before_days: int = 1,
+              target_user_id: int = None) -> int:
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO calendar_events (user_id, event_date, event_time, title, description, event_type, remind_before_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, event_date, event_time, title, description, event_type, remind_before_days))
+        INSERT INTO calendar_events (user_id, target_user_id, event_date, event_time, title, description, event_type, remind_before_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, target_user_id, event_date, event_time, title, description, event_type, remind_before_days))
     event_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -326,7 +333,7 @@ def get_events_for_user(user_id: int, from_date: str = None, limit: int = 50) ->
     cursor = conn.cursor()
     if from_date:
         cursor.execute("""
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days
+            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
             FROM calendar_events
             WHERE user_id = ? AND event_date >= ?
             ORDER BY event_date ASC, event_time ASC
@@ -334,7 +341,7 @@ def get_events_for_user(user_id: int, from_date: str = None, limit: int = 50) ->
         """, (user_id, from_date, limit))
     else:
         cursor.execute("""
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days
+            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
             FROM calendar_events
             WHERE user_id = ?
             ORDER BY event_date ASC, event_time ASC
@@ -349,14 +356,15 @@ def get_events_for_user(user_id: int, from_date: str = None, limit: int = 50) ->
         "title": r[3],
         "description": r[4],
         "type": r[5],
-        "remind_before_days": r[6]
+        "remind_before_days": r[6],
+        "target_user_id": r[7]
     } for r in rows]
 
 def get_event_by_id(event_id: int):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days
+        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
         FROM calendar_events WHERE id = ?
     """, (event_id,))
     row = cursor.fetchone()
@@ -370,7 +378,8 @@ def get_event_by_id(event_id: int):
             "title": row[4],
             "description": row[5],
             "type": row[6],
-            "remind_before_days": row[7]
+            "remind_before_days": row[7],
+            "target_user_id": row[8]
         }
     return None
 
@@ -387,7 +396,7 @@ def get_events_by_date(target_date: str) -> list:
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days
+        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
         FROM calendar_events
         WHERE event_date = ?
     """, (target_date,))
@@ -401,8 +410,35 @@ def get_events_by_date(target_date: str) -> list:
         "title": r[4],
         "description": r[5],
         "type": r[6],
-        "remind_before_days": r[7]
+        "remind_before_days": r[7],
+        "target_user_id": r[8]
     } for r in rows]
+
+def get_birthdays_for_date(target_date: str, family_id: int = None) -> list:
+    """Возвращает дни рождения на указанную дату для членов семьи."""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    if family_id:
+        # Получаем всех членов семьи
+        cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+        relatives = [row[0] for row in cursor.fetchall()]
+        relatives.append(family_id)
+        placeholders = ','.join('?' for _ in relatives)
+        query = f"""
+            SELECT id, user_id, target_user_id, title, description
+            FROM calendar_events
+            WHERE event_date = ? AND event_type = 'birthday' AND user_id IN ({placeholders})
+        """
+        cursor.execute(query, (target_date, *relatives))
+    else:
+        cursor.execute("""
+            SELECT id, user_id, target_user_id, title, description
+            FROM calendar_events
+            WHERE event_date = ? AND event_type = 'birthday'
+        """, (target_date,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "user_id": r[1], "target_user_id": r[2], "title": r[3], "description": r[4]} for r in rows]
 
 
 # ---------- Аналитика и статистика ----------
