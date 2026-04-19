@@ -4,3 +4,5 @@ python-dotenv==1.0.1
 httpx==0.25.2
 aiohttp==3.9.0
 requests==2.31.0
+pydub==0.25.1
+SpeechRecognition==3.10.0
