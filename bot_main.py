@@ -8,6 +8,7 @@ import asyncio
 import re
 import json
 import random
+import io
 from enum import Enum, auto
 from typing import Final
 from datetime import time, date, timedelta
@@ -80,6 +81,10 @@ from features_stub import (
     voice_interface_info,
     analytics_info_text,
 )
+
+# ---------- Голосовые сообщения ----------
+import speech_recognition as sr
+from pydub import AudioSegment
 
 
 logging.basicConfig(
@@ -226,7 +231,6 @@ async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 # ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
 async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Простой маршрутизатор по тексту кнопок."""
     text = update.message.text
     logger.info(f"🖲️ Нажата кнопка: {text}")
     if text == "💬 Поговорить":
@@ -886,6 +890,75 @@ async def handle_game_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         clear_game_state(user_id)
 
 
+# ---------- Голосовые сообщения ----------
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id if user else 0
+    name = context.user_data.get("name") or (user.first_name if user else "друг")
+    
+    processing_msg = await update.message.reply_text(
+        "🎤 Слушаю ваше голосовое сообщение...\n\nЭто может занять несколько секунд."
+    )
+    
+    try:
+        file = await context.bot.get_file(update.message.voice.file_id)
+        audio_bytes = await file.download_as_bytearray()
+        
+        # Конвертация OGG -> WAV
+        audio = AudioSegment.from_ogg(io.BytesIO(audio_bytes))
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = recognizer.record(source)
+        
+        recognized_text = None
+        try:
+            recognized_text = recognizer.recognize_google(audio_data, language="ru-RU")
+        except sr.UnknownValueError:
+            try:
+                recognized_text = recognizer.recognize_google(audio_data, language="en-US")
+            except sr.UnknownValueError:
+                pass
+        
+        if not recognized_text:
+            await processing_msg.edit_text(
+                "😔 Не удалось распознать голосовое сообщение.\n\n"
+                "Попробуйте:\n"
+                "• Говорить чётче и медленнее\n"
+                "• Уменьшить фоновый шум\n"
+                "• Отправить сообщение короче (3-5 секунд)\n\n"
+                "Или просто напишите текстом! 💬",
+                reply_markup=MAIN_MENU_KEYBOARD
+            )
+            return
+        
+        await processing_msg.edit_text(
+            f"📝 Вы сказали: *\"{recognized_text}\"*\n\n🤔 Думаю над ответом...",
+            parse_mode="Markdown"
+        )
+        
+        reply = await generate_companion_reply(recognized_text, name=name, user_id=user_id)
+        
+        await processing_msg.delete()
+        await update.message.reply_text(reply, reply_markup=MAIN_MENU_KEYBOARD)
+        
+        if user:
+            log_activity(user.id, "voice")
+            
+    except Exception as e:
+        logger.error(f"Voice handling error: {e}")
+        await processing_msg.edit_text(
+            "❌ Произошла ошибка при обработке голосового сообщения.\n\n"
+            "Пожалуйста, попробуйте ещё раз или напишите текстом.",
+            reply_markup=MAIN_MENU_KEYBOARD
+        )
+
+
 # ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
@@ -930,7 +1003,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /help — эта справка\n\n"
         "💬 *Общение:*\n"
         "• Просто напишите текст – я отвечу через нейросеть\n"
-        "• /voice_help — голосовые сообщения\n\n"
+        "• 🎤 Отправьте голосовое сообщение – я распознаю и отвечу\n\n"
         "📅 *Напоминания:*\n"
         "• /add_meds — добавить напоминание о лекарствах\n"
         "• /enable_checkin — ежедневный опрос «Как дела?»\n"
@@ -1077,6 +1150,9 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex("^✅ Правда или ложь$"), play_truth_or_lie))
     application.add_handler(MessageHandler(filters.Regex("^❌ Выйти из игры$"), exit_game))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
+
+    # Голосовые сообщения
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
