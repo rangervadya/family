@@ -69,6 +69,7 @@ from storage import (
     init_media_table,
     save_media,
     get_family_media,
+    get_birthdays_for_date,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -125,6 +126,15 @@ class OnboardingState(Enum):
 class MedsState(Enum):
     ASK_TIME = auto()
     ASK_TEXT = auto()
+
+class EventState(Enum):
+    DATE = 1
+    TIME = 2
+    TITLE = 3
+    DESCRIPTION = 4
+    TYPE = 5
+    TARGET_USER = 6
+    REMIND_DAYS = 7
 
 MAIN_MENU_KEYBOARD: Final = ReplyKeyboardMarkup(
     [
@@ -561,23 +571,23 @@ async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
-# ---------- Календарь событий ----------
+# ---------- Календарь событий (с поддержкой дней рождений) ----------
 async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📅 *Добавление события*\n\n"
         "Введите дату в формате ГГГГ-ММ-ДД (например, 2025-12-31):",
         parse_mode="Markdown"
     )
-    return 1
+    return EventState.DATE.value
 
 async def add_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = update.message.text.strip()
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         await update.message.reply_text("❌ Неверный формат. Используйте ГГГГ-ММ-ДД, например 2025-12-31.")
-        return 1
+        return EventState.DATE.value
     context.user_data["event_date"] = date_str
     await update.message.reply_text("Введите время (опционально) в формате ЧЧ:ММ или '-' пропустить:")
-    return 2
+    return EventState.TIME.value
 
 async def add_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time_str = update.message.text.strip()
@@ -585,36 +595,62 @@ async def add_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["event_time"] = None
     elif not re.match(r'^\d{2}:\d{2}$', time_str):
         await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ или '-' пропустить.")
-        return 2
+        return EventState.TIME.value
     else:
         context.user_data["event_time"] = time_str
     await update.message.reply_text("Введите название события (обязательно):")
-    return 3
+    return EventState.TITLE.value
 
 async def add_event_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     if not title:
         await update.message.reply_text("Название не может быть пустым. Введите название:")
-        return 3
+        return EventState.TITLE.value
     context.user_data["event_title"] = title
     await update.message.reply_text("Введите описание (необязательно, можно '-' пропустить):")
-    return 4
+    return EventState.DESCRIPTION.value
 
 async def add_event_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     desc = update.message.text.strip()
     context.user_data["event_description"] = desc if desc != "-" else None
-    await update.message.reply_text("Выберите тип события:\n1 - День рождения\n2 - Праздник\n3 - Встреча\n4 - Другое")
-    return 5
+    await update.message.reply_text(
+        "Выберите тип события:\n"
+        "1 - День рождения\n"
+        "2 - Праздник\n"
+        "3 - Встреча\n"
+        "4 - Другое\n"
+        "5 - День рождения другого человека"
+    )
+    return EventState.TYPE.value
 
 async def add_event_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    type_map = {"1": "birthday", "2": "holiday", "3": "meeting", "4": "other"}
     choice = update.message.text.strip()
+    type_map = {"1": "birthday", "2": "holiday", "3": "meeting", "4": "other", "5": "birthday"}
     if choice not in type_map:
-        await update.message.reply_text("Пожалуйста, выберите 1, 2, 3 или 4.")
-        return 5
+        await update.message.reply_text("Пожалуйста, выберите 1, 2, 3, 4 или 5.")
+        return EventState.TYPE.value
     context.user_data["event_type"] = type_map[choice]
+    
+    if choice == "5":
+        await update.message.reply_text("Введите Telegram ID именинника (или '-' если это ваш день рождения):")
+        return EventState.TARGET_USER.value
+    else:
+        context.user_data["target_user_id"] = None
+        await update.message.reply_text("За сколько дней напомнить? (по умолчанию 1, введите число):")
+        return EventState.REMIND_DAYS.value
+
+async def add_event_target_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == "-":
+        context.user_data["target_user_id"] = None
+    else:
+        try:
+            context.user_data["target_user_id"] = int(text)
+        except ValueError:
+            await update.message.reply_text("❌ ID должен быть числом или '-'.")
+            return EventState.TARGET_USER.value
     await update.message.reply_text("За сколько дней напомнить? (по умолчанию 1, введите число):")
-    return 6
+    return EventState.REMIND_DAYS.value
 
 async def add_event_remind_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days_str = update.message.text.strip()
@@ -630,7 +666,8 @@ async def add_event_remind_days(update: Update, context: ContextTypes.DEFAULT_TY
         description=context.user_data.get("event_description"),
         event_time=context.user_data.get("event_time"),
         event_type=context.user_data.get("event_type", "other"),
-        remind_before_days=days
+        remind_before_days=days,
+        target_user_id=context.user_data.get("target_user_id")
     )
     await update.message.reply_text(
         f"✅ Событие добавлено!\n\n📅 {context.user_data['event_date']}\n"
@@ -651,7 +688,12 @@ async def events_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["📅 *Ваши ближайшие события:*\n"]
     for ev in events:
         time_str = f" {ev['time']}" if ev['time'] else ""
-        lines.append(f"• {ev['date']}{time_str} – *{ev['title']}*")
+        title = ev['title']
+        if ev['type'] == 'birthday' and ev.get('target_user_id'):
+            user_info = get_user(ev['target_user_id'])
+            if user_info:
+                title = f"День рождения {user_info['name']}"
+        lines.append(f"• {ev['date']}{time_str} – *{title}*")
         if ev['description']:
             lines.append(f"  _{ev['description']}_")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -1022,6 +1064,37 @@ async def show_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(video=media['file_id'], caption=caption)
 
 
+# ---------- Автоматические поздравления с днём рождения ----------
+async def send_birthday_greetings(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневная проверка дней рождений и отправка поздравлений."""
+    today = date.today().isoformat()
+    birthdays = get_birthdays_for_date(today)
+    
+    for bday in birthdays:
+        target_id = bday['target_user_id'] if bday['target_user_id'] else bday['user_id']
+        user_info = get_user(target_id)
+        name = user_info['name'] if user_info else f"User_{target_id}"
+        
+        greeting = (
+            f"🎉 *С ДНЁМ РОЖДЕНИЯ!* 🎉\n\n"
+            f"Дорогой(ая) *{name}*!\n\n"
+            f"Желаю здоровья, счастья, радости и тепла!\n"
+            f"Пусть каждый день приносит улыбку, а близкие всегда будут рядом! 🌷\n\n"
+            f"С любовью, твой бот-компаньон «Семья» ❤️"
+        )
+        
+        try:
+            await context.bot.send_message(chat_id=target_id, text=greeting, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Не удалось отправить поздравление {target_id}: {e}")
+        
+        family_id = get_family_id_for_user(target_id)
+        if family_id:
+            add_to_family_feed(family_id, 0, "Бот", f"🎉 Сегодня день рождения у *{name}*! Поздравляем!", "birthday")
+            notification = f"🎉 *Сегодня день рождения у {name}!* Поздравьте его/её в семейном чате!"
+            await notify_family_members(family_id, target_id, context.bot, notification)
+
+
 # ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
@@ -1089,6 +1162,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📸 *Альбом:*\n"
         "• /album — показать семейный альбом\n"
         "• Отправьте фото или видео – они сохранятся в альбом\n\n"
+        "🎂 *Дни рождения:*\n"
+        "• Добавьте день рождения через /add_event (тип 1 или 5)\n"
+        "• Бот автоматически поздравит именинника в 9:00\n\n"
         "🌤️ *Погода:*\n"
         "• /weather — погода (нужно указать город)\n"
         "• Напишите «мой город Москва» – запомню\n\n"
@@ -1181,12 +1257,13 @@ def build_application():
     event_conv = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event_start)],
         states={
-            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
-            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
-            3: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_title)],
-            4: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_description)],
-            5: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_type)],
-            6: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_remind_days)],
+            EventState.DATE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
+            EventState.TIME.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
+            EventState.TITLE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_title)],
+            EventState.DESCRIPTION.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_description)],
+            EventState.TYPE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_type)],
+            EventState.TARGET_USER.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_target_user)],
+            EventState.REMIND_DAYS.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_remind_days)],
         },
         fallbacks=[CommandHandler("cancel", meds_cancel)],
     )
@@ -1219,8 +1296,6 @@ def build_application():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
 
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-
-    # Медиафайлы
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video))
     application.add_handler(CommandHandler("album", show_album))
@@ -1256,6 +1331,7 @@ def build_application():
                         parse_mode="Markdown"
                     )
         job_queue.run_daily(daily_event_reminder, time=time(hour=9, minute=0))
+        job_queue.run_daily(send_birthday_greetings, time=time(hour=9, minute=5))
 
     return application
 
