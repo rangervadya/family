@@ -15,7 +15,8 @@ def init_db():
             age INTEGER,
             city TEXT,
             interests TEXT,
-            role TEXT DEFAULT 'senior'
+            role TEXT DEFAULT 'senior',
+            language TEXT DEFAULT 'ru'
         )
     """)
     
@@ -39,7 +40,7 @@ def init_db():
         )
     """)
     
-    # Таблица relatives с правильной структурой (senior_id, relative_id)
+    # Таблица relatives
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='relatives'")
     if cursor.fetchone():
         cursor.execute("PRAGMA table_info(relatives)")
@@ -150,7 +151,7 @@ def init_media_table():
             family_id INTEGER NOT NULL,
             author_id INTEGER NOT NULL,
             author_name TEXT,
-            file_type TEXT NOT NULL,  -- 'photo', 'video'
+            file_type TEXT NOT NULL,
             file_id TEXT NOT NULL,
             caption TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -180,6 +181,55 @@ def init_health_table():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date)")
+    conn.commit()
+    conn.close()
+
+def init_budget_table():
+    """Таблица для семейного бюджета (транзакции)"""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS budget_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            user_name TEXT,
+            amount REAL NOT NULL,
+            category_id INTEGER,
+            description TEXT,
+            transaction_date TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS budget_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT CHECK(type IN ('income','expense')) NOT NULL,
+            color TEXT DEFAULT '#3788d9'
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_family ON budget_transactions(family_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_date ON budget_transactions(transaction_date)")
+    # Добавим несколько категорий по умолчанию для каждой семьи позже, но не здесь
+    conn.commit()
+    conn.close()
+
+def init_admin_logs():
+    """Таблица для логирования действий пользователей (для админ-панели)"""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT,
+            details TEXT,
+            ip TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -229,6 +279,53 @@ def get_user_language(telegram_id):
     conn.close()
     return row[0] if row and row[0] else 'ru'
 
+def get_all_users():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, name, age, city, interests, role, language FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    users = []
+    for row in rows:
+        users.append({
+            "id": row[0], "name": row[1], "age": row[2], "city": row[3],
+            "interests": row[4], "role": row[5], "language": row[6] if len(row)>6 else 'ru'
+        })
+    return users
+
+def get_user_by_id(telegram_id):
+    return get_user(telegram_id)
+
+def update_user(telegram_id, name=None, age=None, city=None, interests=None, role=None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    if name:
+        cursor.execute("UPDATE users SET name = ? WHERE telegram_id = ?", (name, telegram_id))
+    if age:
+        cursor.execute("UPDATE users SET age = ? WHERE telegram_id = ?", (age, telegram_id))
+    if city:
+        cursor.execute("UPDATE users SET city = ? WHERE telegram_id = ?", (city, telegram_id))
+    if interests:
+        cursor.execute("UPDATE users SET interests = ? WHERE telegram_id = ?", (interests, telegram_id))
+    if role:
+        cursor.execute("UPDATE users SET role = ? WHERE telegram_id = ?", (role, telegram_id))
+    conn.commit()
+    conn.close()
+
+def delete_user(telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("DELETE FROM activities WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("DELETE FROM chat_history WHERE user_id = ?", (telegram_id,))
+    cursor.execute("DELETE FROM reminders WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("DELETE FROM relatives WHERE senior_id = ? OR relative_id = ?", (telegram_id, telegram_id))
+    cursor.execute("DELETE FROM calendar_events WHERE user_id = ? OR target_user_id = ?", (telegram_id, telegram_id))
+    cursor.execute("DELETE FROM games_state WHERE user_id = ?", (telegram_id,))
+    cursor.execute("DELETE FROM health_records WHERE user_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+
 
 # ---------- Напоминания ----------
 def add_reminder(telegram_id, kind, text, time_local):
@@ -268,6 +365,14 @@ def get_activity_summary(telegram_id):
     conn.close()
     return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
 
+def get_all_activities(limit=100):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, telegram_id, action, created_at FROM activities ORDER BY created_at DESC LIMIT ?", (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "user_id": r[1], "action": r[2], "time": r[3]} for r in rows]
+
 
 # ---------- Родственники ----------
 def add_relative_link(senior_telegram_id, relative_telegram_id):
@@ -285,6 +390,15 @@ def get_relatives_for_senior(senior_telegram_id):
     rows = cursor.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+def get_family_members(family_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+    relatives = [row[0] for row in cursor.fetchall()]
+    relatives.append(family_id)
+    conn.close()
+    return relatives
 
 
 # ---------- История диалогов ----------
@@ -490,39 +604,17 @@ def get_birthdays_for_date(target_date: str, family_id: int = None) -> list:
 def get_user_stats(user_id: int, days: int = 7) -> dict:
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND action = 'talk' AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'talk' AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     talks = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     reminders_done = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     sos_count = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND action = 'voice' AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'voice' AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     voice_count = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     total_activities = cursor.fetchone()[0]
-    
     conn.close()
-    
     return {
         "talks": talks,
         "reminders_done": reminders_done,
@@ -533,51 +625,29 @@ def get_user_stats(user_id: int, days: int = 7) -> dict:
     }
 
 def get_family_stats(family_id: int, days: int = 7) -> list:
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
-    relatives = [row[0] for row in cursor.fetchall()]
-    if family_id not in relatives:
-        relatives.append(family_id)
-    
+    members = get_family_members(family_id)
     stats = []
-    for member_id in relatives:
-        cursor.execute("SELECT name FROM users WHERE telegram_id = ?", (member_id,))
-        name_row = cursor.fetchone()
-        member_name = name_row[0] if name_row else f"User_{member_id}"
-        
+    for member_id in members:
+        user = get_user(member_id)
+        member_name = user['name'] if user else f"User_{member_id}"
         member_stats = get_user_stats(member_id, days)
         member_stats["user_id"] = member_id
         member_stats["name"] = member_name
         stats.append(member_stats)
-    
-    conn.close()
     return stats
 
 def get_reminder_completion_rate(user_id: int, days: int = 30) -> dict:
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM reminders
-        WHERE telegram_id = ? AND enabled = 1
-    """, (user_id,))
+    cursor.execute("SELECT COUNT(*) FROM reminders WHERE telegram_id = ? AND enabled = 1", (user_id,))
     total_reminders = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM activities
-        WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')
-    """, (user_id, days))
+    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-' || ? || ' days')", (user_id, days))
     completed = cursor.fetchone()[0]
-    
     conn.close()
-    
     if total_reminders == 0:
         rate = 100.0
     else:
         rate = (completed / (total_reminders * days)) * 100 if total_reminders > 0 else 0
-    
     return {
         "total_reminders": total_reminders,
         "completed": completed,
@@ -588,7 +658,6 @@ def get_reminder_completion_rate(user_id: int, days: int = 30) -> dict:
 def generate_health_report(user_id: int, days: int = 7) -> str:
     stats = get_user_stats(user_id, days)
     reminder_stats = get_reminder_completion_rate(user_id, days)
-    
     report = f"📊 *Отчёт о здоровье за {days} дней*\n\n"
     report += f"💬 Разговоров с ботом: {stats['talks']}\n"
     report += f"💊 Приёмов лекарств (выполнено): {stats['reminders_done']}\n"
@@ -598,22 +667,18 @@ def generate_health_report(user_id: int, days: int = 7) -> str:
     if stats['voice'] > 0:
         report += f"🎤 Голосовых сообщений: {stats['voice']}\n"
     report += f"\n🏆 *Всего активностей:* {stats['total']}\n"
-    
     if reminder_stats['completion_rate'] < 50:
         report += "\n⚠️ *Рекомендация:* старайтесь не пропускать приём лекарств!"
     if stats['talks'] == 0:
         report += "\n💡 *Совет:* общайтесь с ботом – это поднимает настроение!"
-    
     return report
 
 def generate_family_report(family_id: int, days: int = 7) -> str:
     members_stats = get_family_stats(family_id, days)
-    
     report = f"👨‍👩‍👧 *Семейный отчёт за {days} дней*\n\n"
     total_talks = 0
     total_reminders = 0
     total_sos = 0
-    
     for m in members_stats:
         report += f"👤 *{m['name']}*\n"
         report += f"   💬 Разговоров: {m['talks']}\n"
@@ -622,12 +687,10 @@ def generate_family_report(family_id: int, days: int = 7) -> str:
         total_talks += m['talks']
         total_reminders += m['reminders_done']
         total_sos += m['sos']
-    
     report += f"📊 *Общая активность семьи:*\n"
     report += f"   💬 Всего диалогов: {total_talks}\n"
     report += f"   💊 Всего приёмов: {total_reminders}\n"
     report += f"   🆘 Всего SOS: {total_sos}\n"
-    
     return report
 
 
@@ -748,7 +811,7 @@ def get_health_stats(user_id, days=30):
     }
 
 
-# ---------- Экспорт данных в CSV ----------
+# ---------- Экспорт данных ----------
 def export_chat_history(user_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -780,3 +843,138 @@ def export_family_feed(family_id):
     for f in feed:
         writer.writerow([f['author_name'], f['message'], f['message_type'], f['created_at']])
     return output.getvalue()
+
+def export_budget_transactions(family_id):
+    transactions = get_budget_transactions(family_id, limit=1000)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Дата", "Тип", "Категория", "Сумма", "Кто", "Описание"])
+    for t in transactions:
+        cat_name = t['category_name'] if t['category_name'] else ""
+        writer.writerow([t['date'], t['type'], cat_name, t['amount'], t['user_name'], t['description']])
+    return output.getvalue()
+
+
+# ---------- Семейный бюджет ----------
+def add_budget_category(family_id, name, type_, color="#3788d9"):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO budget_categories (family_id, name, type, color) VALUES (?, ?, ?, ?)",
+                   (family_id, name, type_, color))
+    cat_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return cat_id
+
+def get_budget_categories(family_id, type_=None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    if type_:
+        cursor.execute("SELECT id, name, type, color FROM budget_categories WHERE family_id = ? AND type = ?", (family_id, type_))
+    else:
+        cursor.execute("SELECT id, name, type, color FROM budget_categories WHERE family_id = ?", (family_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1], "type": r[2], "color": r[3]} for r in rows]
+
+def add_budget_transaction(family_id, user_id, user_name, amount, category_id, description, transaction_date):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO budget_transactions (family_id, user_id, user_name, amount, category_id, description, transaction_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (family_id, user_id, user_name, amount, category_id, description, transaction_date))
+    tid = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return tid
+
+def get_budget_transactions(family_id, start_date=None, end_date=None, limit=100):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    query = """
+        SELECT t.id, t.transaction_date, t.amount, t.description, t.user_name,
+               c.name as category_name, c.type as category_type
+        FROM budget_transactions t
+        LEFT JOIN budget_categories c ON t.category_id = c.id
+        WHERE t.family_id = ?
+    """
+    params = [family_id]
+    if start_date:
+        query += " AND t.transaction_date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND t.transaction_date <= ?"
+        params.append(end_date)
+    query += " ORDER BY t.transaction_date DESC LIMIT ?"
+    params.append(limit)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [{
+        "id": r[0], "date": r[1], "amount": r[2], "description": r[3],
+        "user_name": r[4], "category_name": r[5], "category_type": r[6]
+    } for r in rows]
+
+def get_budget_summary(family_id, start_date=None, end_date=None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    params = [family_id]
+    date_condition = ""
+    if start_date and end_date:
+        date_condition = " AND transaction_date BETWEEN ? AND ?"
+        params.extend([start_date, end_date])
+    elif start_date:
+        date_condition = " AND transaction_date >= ?"
+        params.append(start_date)
+    elif end_date:
+        date_condition = " AND transaction_date <= ?"
+        params.append(end_date)
+    
+    # Доходы
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(amount), 0) FROM budget_transactions t
+        LEFT JOIN budget_categories c ON t.category_id = c.id
+        WHERE t.family_id = ? AND c.type = 'income' {date_condition}
+    """, params)
+    total_income = cursor.fetchone()[0]
+    # Расходы
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(amount), 0) FROM budget_transactions t
+        LEFT JOIN budget_categories c ON t.category_id = c.id
+        WHERE t.family_id = ? AND c.type = 'expense' {date_condition}
+    """, params)
+    total_expense = cursor.fetchone()[0]
+    conn.close()
+    return {
+        "total_income": total_income,
+        "total_expense": total_expense,
+        "balance": total_income - total_expense
+    }
+
+def delete_budget_transaction(transaction_id, family_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM budget_transactions WHERE id = ? AND family_id = ?", (transaction_id, family_id))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+# ---------- Админ-панель: логи ----------
+def add_admin_log(user_id, action, details="", ip=""):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO admin_logs (user_id, action, details, ip) VALUES (?, ?, ?, ?)",
+                   (user_id, action, details, ip))
+    conn.commit()
+    conn.close()
+
+def get_admin_logs(limit=100):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, user_id, action, details, ip, created_at FROM admin_logs ORDER BY created_at DESC LIMIT ?", (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "user_id": r[1], "action": r[2], "details": r[3], "ip": r[4], "time": r[5]} for r in rows]
