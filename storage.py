@@ -183,17 +183,27 @@ def get_user(telegram_id):
     return None
 
 def set_user_language(telegram_id, lang):
-    """Сохраняет язык пользователя (ru/en) – нужно добавить колонку в users"""
+    """Сохраняет язык пользователя (ru/en) – добавляет колонку, если её нет."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
+    # Проверяем, существует ли колонка language
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'language' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
     cursor.execute("UPDATE users SET language = ? WHERE telegram_id = ?", (lang, telegram_id))
     conn.commit()
     conn.close()
 
 def get_user_language(telegram_id):
+    """Возвращает язык пользователя, по умолчанию 'ru'."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'language' not in columns:
+        conn.close()
+        return 'ru'
     cursor.execute("SELECT language FROM users WHERE telegram_id = ?", (telegram_id,))
     row = cursor.fetchone()
     conn.close()
@@ -330,7 +340,7 @@ def get_family_feed(family_id: int, limit: int = 20) -> list:
     return feed
 
 
-# ---------- Календарь событий (с поддержкой дней рождений) ----------
+# ---------- Календарь событий ----------
 def add_event(user_id: int, event_date: str, title: str, description: str = None,
               event_time: str = None, event_type: str = "other", remind_before_days: int = 1,
               target_user_id: int = None) -> int:
