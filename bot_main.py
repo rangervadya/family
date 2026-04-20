@@ -29,7 +29,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.request import HTTPXRequest
-from telegram.error import NetworkError, TimedOut
+from telegram.error import NetworkError, TimedOut, BadRequest
 
 from bot_config import get_settings
 from ai_stubs import generate_companion_reply
@@ -72,6 +72,13 @@ from storage import (
     get_birthdays_for_date,
     get_user_language,
     set_user_language,
+    init_health_table,
+    add_health_record,
+    get_health_records,
+    get_health_stats,
+    export_chat_history,
+    export_health_records,
+    export_family_feed,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -91,7 +98,6 @@ from features_stub import (
 # ---------- Голосовые сообщения ----------
 import speech_recognition as sr
 from pydub import AudioSegment
-
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -199,7 +205,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         'birthday_greeting': "🎉 *С ДНЁМ РОЖДЕНИЯ!* 🎉\n\nДорогой(ая) *{name}*!\n\nЖелаю здоровья, счастья, радости и тепла!\nПусть каждый день приносит улыбку, а близкие всегда будут рядом! 🌷\n\nС любовью, твой бот-компаньон «Семья» ❤️",
         'birthday_feed': "🎉 Сегодня день рождения у *{name}*! Поздравляем!",
         'birthday_notify': "🎉 *Сегодня день рождения у {name}!* Поздравьте его/её в семейном чате!",
-        'help_text': "🤖 *Бот-компаньон «Семья»*\n\nОсновные команды:\n• /start — начать заново\n• /menu — главное меню\n• /help — эта справка\n• /lang — сменить язык\n\n💬 *Общение:*\n• Просто напишите текст – я отвечу через нейросеть\n• 🎤 Отправьте голосовое сообщение – я распознаю и отвечу\n\n📅 *Напоминания:*\n• /add_meds — добавить напоминание о лекарствах\n• /enable_checkin — ежедневный опрос «Как дела?»\n• /disable_checkin — отключить опрос\n\n👨‍👩‍👧 *Семья:*\n• /add_relative <ID> — привязать родственника\n• /family_send <текст> — отправить в семейный чат\n• /family_feed — показать семейную ленту\n• /sos — экстренная помощь\n\n📊 *Аналитика:*\n• /health_report [дни] — мой отчёт о здоровье\n• /family_report [дни] — сводный отчёт по семье\n• /member_stats <ID> [дни] — статистика члена семьи\n\n📅 *Календарь:*\n• /add_event — добавить событие\n• /events_list — список событий\n• /delete_event <id> — удалить событие\n\n🎮 *Игры:*\n• /games — меню игр (загадки, слова, правда/ложь)\n\n📸 *Альбом:*\n• /album — показать семейный альбом\n• Отправьте фото или видео – они сохранятся в альбом\n\n🎂 *Дни рождения:*\n• Добавьте день рождения через /add_event (тип 1 или 5)\n• Бот автоматически поздравит именинника в 9:00\n\n🌤️ *Погода:*\n• /weather — погода (нужно указать город)\n• Напишите «мой город Москва» – запомню\n\n🆘 *Помощь:*\n• /companions — поиск компаньонов\n• /volunteers — волонтёрская помощь\n• /health_extra — советы по здоровью\n• /helper — помощь по дому\n• /nostalgia — ностальгия\n• /courses — курсы\n• /achievements — достижения\n• /admin_stats — аналитика (для админов)",
+        'help_text': "🤖 *Бот-компаньон «Семья»*\n\nОсновные команды:\n• /start — начать заново\n• /menu — главное меню\n• /help — эта справка\n• /lang — сменить язык\n\n💬 *Общение:*\n• Просто напишите текст – я отвечу через нейросеть\n• 🎤 Отправьте голосовое сообщение – я распознаю и отвечу\n\n📅 *Напоминания:*\n• /add_meds — добавить напоминание о лекарствах\n• /enable_checkin — ежедневный опрос «Как дела?»\n• /disable_checkin — отключить опрос\n\n👨‍👩‍👧 *Семья:*\n• /add_relative <ID> — привязать родственника\n• /family_send <текст> — отправить в семейный чат\n• /family_feed — показать семейную ленту\n• /sos — экстренная помощь\n\n📊 *Аналитика:*\n• /health_report [дни] — мой отчёт о здоровье\n• /family_report [дни] — сводный отчёт по семье\n• /member_stats <ID> [дни] — статистика члена семьи\n\n📅 *Календарь:*\n• /add_event — добавить событие\n• /events_list — список событий\n• /delete_event <id> — удалить событие\n\n🎮 *Игры:*\n• /games — меню игр (загадки, слова, правда/ложь)\n\n📸 *Альбом:*\n• /album — показать семейный альбом\n• Отправьте фото или видео – они сохранятся в альбом\n\n🎂 *Дни рождения:*\n• Добавьте день рождения через /add_event (тип 1 или 5)\n• Бот автоматически поздравит именинника в 9:00\n\n🏥 *Медицинский дневник:*\n• /health — меню мед. дневника\n• /health_stats — статистика показателей\n• /health_list — список записей\n• /health_chart — графики давления\n\n📁 *Экспорт данных:*\n• /export — экспорт истории, медзаписей, семейной ленты в CSV\n\n🌤️ *Погода:*\n• /weather — погода (нужно указать город)\n• Напишите «мой город Москва» – запомню\n\n🆘 *Помощь:*\n• /companions — поиск компаньонов\n• /volunteers — волонтёрская помощь\n• /health_extra — советы по здоровью\n• /helper — помощь по дому\n• /nostalgia — ностальгия\n• /courses — курсы\n• /achievements — достижения\n• /admin_stats — аналитика (для админов)",
     },
     'en': {
         'start': "Hello! I'm 'Family' companion bot 🏡\n\nLet's get acquainted.\nWho are you?\n\n➤ I'm an elderly user\n➤ I'm a relative/guardian",
@@ -286,12 +292,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
         'birthday_greeting': "🎉 *HAPPY BIRTHDAY!* 🎉\n\nDear *{name}*!\n\nI wish you health, happiness, joy and warmth!\nMay every day bring a smile, and may your loved ones always be by your side! 🌷\n\nWith love, your companion bot «Family» ❤️",
         'birthday_feed': "🎉 Today is *{name}*'s birthday! Congratulations!",
         'birthday_notify': "🎉 *Today is {name}'s birthday!* Congratulate them in the family chat!",
-        'help_text': "🤖 *Family companion bot*\n\nMain commands:\n• /start — start over\n• /menu — main menu\n• /help — this help\n• /lang — change language\n\n💬 *Communication:*\n• Just write text – I'll reply via AI\n• 🎤 Send a voice message – I'll recognize and reply\n\n📅 *Reminders:*\n• /add_meds — add medication reminder\n• /enable_checkin — daily «How are you?» survey\n• /disable_checkin — disable survey\n\n👨‍👩‍👧 *Family:*\n• /add_relative <ID> — link a relative\n• /family_send <text> — send to family chat\n• /family_feed — show family feed\n• /sos — emergency help\n\n📊 *Analytics:*\n• /health_report [days] — my health report\n• /family_report [days] — family summary report\n• /member_stats <ID> [days] — family member statistics\n\n📅 *Calendar:*\n• /add_event — add event\n• /events_list — list events\n• /delete_event <id> — delete event\n\n🎮 *Games:*\n• /games — game menu (riddles, words, truth/lie)\n\n📸 *Album:*\n• /album — show family album\n• Send a photo or video – they will be saved to the album\n\n🎂 *Birthdays:*\n• Add a birthday via /add_event (type 1 or 5)\n• The bot will automatically congratulate the birthday person at 9:00\n\n🌤️ *Weather:*\n• /weather — weather (need to specify city)\n• Write «my city Moscow» – I'll remember\n\n🆘 *Help:*\n• /companions — find companions\n• /volunteers — volunteer help\n• /health_extra — health tips\n• /helper — home help\n• /nostalgia — nostalgia\n• /courses — courses\n• /achievements — achievements\n• /admin_stats — analytics (for admins)",
+        'help_text': "🤖 *Family companion bot*\n\nMain commands:\n• /start — start over\n• /menu — main menu\n• /help — this help\n• /lang — change language\n\n💬 *Communication:*\n• Just write text – I'll reply via AI\n• 🎤 Send a voice message – I'll recognize and reply\n\n📅 *Reminders:*\n• /add_meds — add medication reminder\n• /enable_checkin — daily «How are you?» survey\n• /disable_checkin — disable survey\n\n👨‍👩‍👧 *Family:*\n• /add_relative <ID> — link a relative\n• /family_send <text> — send to family chat\n• /family_feed — show family feed\n• /sos — emergency help\n\n📊 *Analytics:*\n• /health_report [days] — my health report\n• /family_report [days] — family summary report\n• /member_stats <ID> [days] — family member statistics\n\n📅 *Calendar:*\n• /add_event — add event\n• /events_list — list events\n• /delete_event <id> — delete event\n\n🎮 *Games:*\n• /games — game menu (riddles, words, truth/lie)\n\n📸 *Album:*\n• /album — show family album\n• Send a photo or video – they will be saved to the album\n\n🎂 *Birthdays:*\n• Add a birthday via /add_event (type 1 or 5)\n• The bot will automatically congratulate the birthday person at 9:00\n\n🏥 *Health diary:*\n• /health — health diary menu\n• /health_stats — statistics\n• /health_list — list records\n• /health_chart — blood pressure chart\n\n📁 *Data export:*\n• /export — export chat history, health records, family feed to CSV\n\n🌤️ *Weather:*\n• /weather — weather (need to specify city)\n• Write «my city Moscow» – I'll remember\n\n🆘 *Help:*\n• /companions — find companions\n• /volunteers — volunteer help\n• /health_extra — health tips\n• /helper — home help\n• /nostalgia — nostalgia\n• /courses — courses\n• /achievements — achievements\n• /admin_stats — analytics (for admins)",
     }
 }
 
 def get_text(lang: str, key: str, **kwargs) -> str:
-    """Возвращает текст на нужном языке с подстановкой параметров."""
     text = TEXTS.get(lang, TEXTS['ru']).get(key, key)
     if kwargs:
         return text.format(**kwargs)
@@ -304,7 +309,8 @@ def get_main_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
             ["👥 Events", "🆘 HELP"],
             ["👨‍👩‍👧 Family", "⚙️ Settings"],
             ["🎮 Games", "🌤️ Weather"],
-            ["📸 Album", "❓ Help"],
+            ["📸 Album", "🏥 Health"],
+            ["📁 Export", "❓ Help"],
         ]
     else:
         buttons = [
@@ -312,7 +318,8 @@ def get_main_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
             ["👥 События", "🆘 ПОМОЩЬ"],
             ["👨‍👩‍👧 Семья", "⚙️ Настройки"],
             ["🎮 Игры", "🌤️ Погода"],
-            ["📸 Альбом", "❓ Помощь"],
+            ["📸 Альбом", "🏥 Здоровье"],
+            ["📁 Экспорт", "❓ Помощь"],
         ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -356,14 +363,26 @@ class EventState(Enum):
     TARGET_USER = 6
     REMIND_DAYS = 7
 
+class HealthState(Enum):
+    CHOOSE = 10
+    DATE = 11
+    TIME = 12
+    SYSTOLIC = 13
+    DIASTOLIC = 14
+    PULSE = 15
+    SUGAR = 16
+    WEIGHT = 17
+    NOTES = 18
+
+class ExportState(Enum):
+    CHOOSE = 20
+
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 async def get_user_lang(update: Update) -> str:
-    """Определяет язык пользователя (из БД или из Telegram)."""
     user_id = update.effective_user.id
     lang = get_user_language(user_id)
     if not lang:
-        # Пытаемся определить по языку Telegram
         if update.effective_user and update.effective_user.language_code:
             if update.effective_user.language_code.startswith('ru'):
                 lang = 'ru'
@@ -379,9 +398,7 @@ async def get_user_lang(update: Update) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
     text = get_text(lang, 'start')
-    keyboard = [["Я пользователь", "Я родственник"]]
-    if lang == 'en':
-        keyboard = [["Elderly user", "Relative"]]
+    keyboard = [["Я пользователь", "Я родственник"]] if lang == 'ru' else [["Elderly user", "Relative"]]
     await update.message.reply_text(
         text,
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
@@ -393,24 +410,16 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     text = (update.message.text or "").strip().lower()
     if "родствен" in text or "relative" in text:
         context.user_data["role"] = Role.RELATIVE.value
-        await update.message.reply_text(
-            get_text(lang, 'choose_role'),
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await update.message.reply_text(get_text(lang, 'choose_role'), reply_markup=ReplyKeyboardRemove())
         return OnboardingState.RELATIVE_CODE.value
     context.user_data["role"] = Role.SENIOR.value
-    await update.message.reply_text(
-        get_text(lang, 'senior_name'),
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text(get_text(lang, 'senior_name'), reply_markup=ReplyKeyboardRemove())
     return OnboardingState.SENIOR_NAME.value
 
 async def senior_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
     context.user_data["name"] = (update.message.text or "").strip()
-    await update.message.reply_text(
-        get_text(lang, 'senior_age', name=context.user_data["name"])
-    )
+    await update.message.reply_text(get_text(lang, 'senior_age', name=context.user_data["name"]))
     return OnboardingState.SENIOR_AGE.value
 
 async def senior_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -440,7 +449,7 @@ async def senior_interests(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     city = context.user_data.get("city")
     interests = context.user_data.get("interests")
     upsert_user(telegram_id, role, name, age, city, interests)
-    name_for_text = name or "друг" if lang == 'ru' else "friend"
+    name_for_text = name or ("друг" if lang == 'ru' else "friend")
     await update.message.reply_text(
         get_text(lang, 'senior_complete', name=name_for_text),
         reply_markup=get_main_menu_keyboard(lang),
@@ -484,6 +493,10 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await weather_command(update, context)
     elif text in ["📸 Альбом", "📸 Album"]:
         await show_album(update, context)
+    elif text in ["🏥 Здоровье", "🏥 Health"]:
+        await health_menu(update, context)
+    elif text in ["📁 Экспорт", "📁 Export"]:
+        await export_menu(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
         await help_cmd(update, context)
     else:
@@ -495,16 +508,22 @@ async def handle_talk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lang = await get_user_lang(update)
     name = context.user_data.get("name") or (user.first_name if user else ("друг" if lang == 'ru' else "friend"))
     last_text = (update.message.text or "").strip()
-
+    if not last_text:
+        return
     if user_id:
         save_message(user_id, "user", last_text)
-
     if user:
         log_activity(user.id, "talk")
-
     reply = await generate_companion_reply(last_text, name=name, user_id=user_id)
-    await update.message.reply_text(reply)
-
+    if not reply:
+        reply = "😊 Извините, я не смог придумать ответ. Попробуйте ещё раз."
+    try:
+        await update.message.reply_text(reply)
+    except BadRequest as e:
+        if "Message text is empty" in str(e):
+            await update.message.reply_text("😊 Спасибо за сообщение!")
+        else:
+            raise
     if user_id and reply:
         save_message(user_id, "assistant", reply)
 
@@ -587,9 +606,7 @@ async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = await get_user_lang(update)
-    await update.message.reply_text(
-        get_text(lang, 'help_text')  # кратко, но можно вывести список команд
-    )
+    await update.message.reply_text(get_text(lang, 'help_text'), parse_mode="Markdown")
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await handle_talk(update, context)
@@ -598,10 +615,7 @@ async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------- Напоминания о лекарствах ----------
 async def add_meds_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
-    await update.message.reply_text(
-        get_text(lang, 'add_reminder_prompt'),
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text(get_text(lang, 'add_reminder_prompt'), reply_markup=ReplyKeyboardRemove())
     return MedsState.ASK_TIME.value
 
 async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -622,7 +636,7 @@ async def add_meds_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def meds_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
     chat_id = job.chat_id
-    text = job.data.get("text", "Пора принять лекарство." if get_user_language(chat_id) == 'ru' else "Time to take medication.")
+    text = job.data.get("text", "Пора принять лекарство.")
     try:
         await context.bot.send_message(chat_id=chat_id, text=f"💊 {text}")
         log_activity(chat_id, "reminder_done")
@@ -656,10 +670,7 @@ async def add_meds_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def meds_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
-    await update.message.reply_text(
-        get_text(lang, 'add_reminder_cancel'),
-        reply_markup=get_main_menu_keyboard(lang),
-    )
+    await update.message.reply_text(get_text(lang, 'add_reminder_cancel'), reply_markup=get_main_menu_keyboard(lang))
     return ConversationHandler.END
 
 
@@ -682,12 +693,7 @@ async def enable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     job_queue: JobQueue = context.job_queue
     for job in job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
         job.schedule_removal()
-    job_queue.run_daily(
-        daily_checkin,
-        time=time(hour=10, minute=0),
-        chat_id=chat_id,
-        name=f"checkin-{chat_id}",
-    )
+    job_queue.run_daily(daily_checkin, time=time(hour=10, minute=0), chat_id=chat_id, name=f"checkin-{chat_id}")
     await update.message.reply_text(
         "Хорошо, я буду каждый день в 10:00 спрашивать, как у вас дела. 🌞" if lang == 'ru' else "Okay, I'll ask you every day at 10:00 how you're doing. 🌞",
         reply_markup=get_main_menu_keyboard(lang),
@@ -739,17 +745,13 @@ async def family_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     if not context.args:
         await update.message.reply_text(get_text(lang, 'family_send_usage'), reply_markup=get_main_menu_keyboard(lang))
         return
     message_text = " ".join(context.args)
-    
     add_to_family_feed(family_id, user_id, user_name, message_text, "text")
-    
     notification = get_text(lang, 'family_send_notify', name=user_name, message=message_text)
     await notify_family_members(family_id, user_id, context.bot, notification)
-    
     await update.message.reply_text(get_text(lang, 'family_send_success'), reply_markup=get_main_menu_keyboard(lang))
 
 async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -764,12 +766,10 @@ async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     feed = get_family_feed(family_id, limit=15)
     if not feed:
         await update.message.reply_text(get_text(lang, 'family_feed_empty'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     lines = [get_text(lang, 'family_feed_title')]
     for entry in feed:
         time_str = str(entry["created_at"])[:16].replace("-", ".").replace("T", " ")
@@ -831,7 +831,6 @@ async def add_event_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, выберите 1, 2, 3, 4 или 5." if lang == 'ru' else "Please select 1, 2, 3, 4 or 5.")
         return EventState.TYPE.value
     context.user_data["event_type"] = type_map[choice]
-    
     if choice == "5":
         await update.message.reply_text(get_text(lang, 'event_add_target'))
         return EventState.TARGET_USER.value
@@ -857,10 +856,7 @@ async def add_event_target_user(update: Update, context: ContextTypes.DEFAULT_TY
 async def add_event_remind_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
     days_str = update.message.text.strip()
-    if not days_str.isdigit():
-        days = 1
-    else:
-        days = int(days_str)
+    days = int(days_str) if days_str.isdigit() else 1
     user_id = update.effective_user.id
     add_event(
         user_id=user_id,
@@ -929,24 +925,15 @@ async def health_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             days = 30
     stats = get_user_stats(user_id, days)
     reminder_stats = get_reminder_completion_rate(user_id, days)
-    
     if reminder_stats['total_reminders'] > 0:
         report = get_text(lang, 'health_report',
-            days=days,
-            talks=stats['talks'],
-            reminders=stats['reminders_done'],
-            rate=reminder_stats['completion_rate'],
-            sos=stats['sos'],
-            voice=stats['voice'],
-            total=stats['total'])
+            days=days, talks=stats['talks'], reminders=stats['reminders_done'],
+            rate=reminder_stats['completion_rate'], sos=stats['sos'],
+            voice=stats['voice'], total=stats['total'])
     else:
         report = get_text(lang, 'health_report_no_reminders',
-            days=days,
-            talks=stats['talks'],
-            reminders=stats['reminders_done'],
-            sos=stats['sos'],
-            voice=stats['voice'],
-            total=stats['total'])
+            days=days, talks=stats['talks'], reminders=stats['reminders_done'],
+            sos=stats['sos'], voice=stats['voice'], total=stats['total'])
     if reminder_stats['completion_rate'] < 50 and reminder_stats['total_reminders'] > 0:
         report += get_text(lang, 'health_recommendation_meds')
     if stats['talks'] == 0:
@@ -960,18 +947,14 @@ async def family_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     days = 7
     if context.args and context.args[0].isdigit():
         days = int(context.args[0])
         if days > 30:
             days = 30
-    
     members_stats = get_family_stats(family_id, days)
     report = get_text(lang, 'family_report', days=days)
-    total_talks = 0
-    total_reminders = 0
-    total_sos = 0
+    total_talks, total_reminders, total_sos = 0,0,0
     for m in members_stats:
         report += get_text(lang, 'family_report_member', name=m['name'], talks=m['talks'], reminders=m['reminders_done'], sos=m['sos'])
         total_talks += m['talks']
@@ -987,38 +970,31 @@ async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     if not context.args:
         await update.message.reply_text("📝 Использование: /member_stats <Telegram ID> [дни]" if lang == 'ru' else "📝 Usage: /member_stats <Telegram ID> [days]", reply_markup=get_main_menu_keyboard(lang))
         return
-    
     try:
         target_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("❌ ID должен быть числом." if lang == 'ru' else "❌ ID must be a number.", reply_markup=get_main_menu_keyboard(lang))
         return
-    
     import sqlite3
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM relatives WHERE senior_id = ? AND relative_id = ?", (family_id, target_id))
     is_relative = cursor.fetchone() is not None
     conn.close()
-    
     if target_id != family_id and not is_relative:
         await update.message.reply_text("❌ Этот пользователь не является членом вашей семьи." if lang == 'ru' else "❌ This user is not a member of your family.", reply_markup=get_main_menu_keyboard(lang))
         return
-    
     days = 7
     if len(context.args) > 1 and context.args[1].isdigit():
         days = int(context.args[1])
         if days > 30:
             days = 30
-    
     stats = get_user_stats(target_id, days)
     user_info = get_user(target_id)
     name = user_info["name"] if user_info else f"User_{target_id}"
-    
     report = get_text(lang, 'member_stats', name=name, id=target_id, days=days,
                      talks=stats['talks'], reminders=stats['reminders_done'],
                      sos=stats['sos'], voice=stats['voice'], total=stats['total'])
@@ -1054,49 +1030,33 @@ TRUTH_OR_LIE = [
 
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
-    await update.message.reply_text(
-        get_text(lang, 'games_menu'),
-        reply_markup=get_games_menu_keyboard(lang),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(get_text(lang, 'games_menu'), reply_markup=get_games_menu_keyboard(lang), parse_mode="Markdown")
 
 async def play_riddle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
     riddle = random.choice(RIDDLES)
     save_game_state(user_id, "riddle", json.dumps({"question": riddle[0], "answer": riddle[1]}))
-    await update.message.reply_text(
-        get_text(lang, 'riddle_game', question=riddle[0]),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(get_text(lang, 'riddle_game', question=riddle[0]), parse_mode="Markdown")
 
 async def play_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
     save_game_state(user_id, "words", json.dumps({"last_letter": None, "used_words": []}))
-    await update.message.reply_text(
-        get_text(lang, 'words_game'),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(get_text(lang, 'words_game'), parse_mode="Markdown")
 
 async def play_truth_or_lie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
     question, answer = random.choice(TRUTH_OR_LIE)
     save_game_state(user_id, "truth_or_lie", json.dumps({"question": question, "answer": answer}))
-    await update.message.reply_text(
-        get_text(lang, 'truth_lie_game', question=question),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(get_text(lang, 'truth_lie_game', question=question), parse_mode="Markdown")
 
 async def exit_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
     clear_game_state(user_id)
-    await update.message.reply_text(
-        get_text(lang, 'exit_game'),
-        reply_markup=get_main_menu_keyboard(lang),
-    )
+    await update.message.reply_text(get_text(lang, 'exit_game'), reply_markup=get_main_menu_keyboard(lang))
 
 def find_word_on_letter(letter: str, used_words: set) -> str:
     words_db = ["апельсин", "банан", "вишня", "груша", "дыня", "ежевика", "жёлудь", "земляника", "ирис", "йогурт",
@@ -1116,56 +1076,46 @@ async def handle_game_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     game_name = state["game_name"]
     game_data = json.loads(state["game_data"])
     answer = update.message.text.strip().lower()
-    
     if game_name == "riddle":
-        correct_answer = game_data["answer"]
-        if answer == correct_answer or answer in correct_answer:
+        correct = game_data["answer"]
+        if answer == correct or answer in correct:
             await update.message.reply_text(get_text(lang, 'riddle_correct'), reply_markup=get_main_menu_keyboard(lang))
         else:
-            await update.message.reply_text(get_text(lang, 'riddle_wrong', answer=correct_answer), reply_markup=get_main_menu_keyboard(lang))
+            await update.message.reply_text(get_text(lang, 'riddle_wrong', answer=correct), reply_markup=get_main_menu_keyboard(lang))
         clear_game_state(user_id)
-    
     elif game_name == "words":
         last_letter = game_data.get("last_letter")
         used_words = set(game_data.get("used_words", []))
-        
         if answer in used_words:
             await update.message.reply_text(get_text(lang, 'words_used', word=answer), reply_markup=get_main_menu_keyboard(lang))
             clear_game_state(user_id)
             return
-        
         if last_letter and answer[0] != last_letter:
             await update.message.reply_text(get_text(lang, 'words_wrong_letter', letter=last_letter), reply_markup=get_main_menu_keyboard(lang))
             clear_game_state(user_id)
             return
-        
         if len(answer) < 2:
             await update.message.reply_text(get_text(lang, 'words_too_short'), reply_markup=get_main_menu_keyboard(lang))
             clear_game_state(user_id)
             return
-        
         used_words.add(answer)
-        last_letter = answer[-1]
-        save_game_state(user_id, "words", json.dumps({"last_letter": last_letter, "used_words": list(used_words)}))
-        
-        bot_word = find_word_on_letter(last_letter, used_words)
+        new_last = answer[-1]
+        save_game_state(user_id, "words", json.dumps({"last_letter": new_last, "used_words": list(used_words)}))
+        bot_word = find_word_on_letter(new_last, used_words)
         if bot_word:
             used_words.add(bot_word)
-            new_last_letter = bot_word[-1]
-            save_game_state(user_id, "words", json.dumps({"last_letter": new_last_letter, "used_words": list(used_words)}))
-            await update.message.reply_text(get_text(lang, 'words_bot_turn', word=bot_word, letter=new_last_letter))
+            next_letter = bot_word[-1]
+            save_game_state(user_id, "words", json.dumps({"last_letter": next_letter, "used_words": list(used_words)}))
+            await update.message.reply_text(get_text(lang, 'words_bot_turn', word=bot_word, letter=next_letter))
         else:
-            await update.message.reply_text(get_text(lang, 'words_win', letter=last_letter), reply_markup=get_main_menu_keyboard(lang))
+            await update.message.reply_text(get_text(lang, 'words_win', letter=new_last), reply_markup=get_main_menu_keyboard(lang))
             clear_game_state(user_id)
-    
     elif game_name == "truth_or_lie":
-        is_true = answer in ["правда", "верно", "да", "true", "truth"]
-        is_false = answer in ["ложь", "неправда", "нет", "false", "lie"]
-        
+        is_true = answer in ["правда","верно","да","true","truth"]
+        is_false = answer in ["ложь","неправда","нет","false","lie"]
         if not (is_true or is_false):
             await update.message.reply_text(get_text(lang, 'truth_lie_prompt'))
             return
-        
         correct = game_data["answer"]
         if (is_true and correct) or (is_false and not correct):
             await update.message.reply_text(get_text(lang, 'truth_lie_correct'), reply_markup=get_main_menu_keyboard(lang))
@@ -1180,24 +1130,19 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id if user else 0
     lang = await get_user_lang(update)
     name = context.user_data.get("name") or (user.first_name if user else ("друг" if lang == 'ru' else "friend"))
-    
     processing_msg = await update.message.reply_text(get_text(lang, 'voice_processing'))
-    
     try:
         file = await context.bot.get_file(update.message.voice.file_id)
         audio_bytes = await file.download_as_bytearray()
-        
         audio = AudioSegment.from_ogg(io.BytesIO(audio_bytes))
         audio = audio.set_channels(1).set_frame_rate(16000)
         wav_io = io.BytesIO()
         audio.export(wav_io, format="wav")
         wav_io.seek(0)
-        
         recognizer = sr.Recognizer()
         with sr.AudioFile(wav_io) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = recognizer.record(source)
-        
         recognized_text = None
         try:
             recognized_text = recognizer.recognize_google(audio_data, language="ru-RU")
@@ -1206,21 +1151,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 recognized_text = recognizer.recognize_google(audio_data, language="en-US")
             except sr.UnknownValueError:
                 pass
-        
         if not recognized_text:
             await processing_msg.edit_text(get_text(lang, 'voice_failed'), reply_markup=get_main_menu_keyboard(lang))
             return
-        
         await processing_msg.edit_text(get_text(lang, 'voice_recognized', text=recognized_text), parse_mode="Markdown")
-        
         reply = await generate_companion_reply(recognized_text, name=name, user_id=user_id)
-        
+        if not reply:
+            reply = get_text(lang, 'talk_placeholder')
         await processing_msg.delete()
         await update.message.reply_text(reply, reply_markup=get_main_menu_keyboard(lang))
-        
         if user:
             log_activity(user.id, "voice")
-            
     except Exception as e:
         logger.error(f"Voice handling error: {e}")
         await processing_msg.edit_text(get_text(lang, 'voice_error'), reply_markup=get_main_menu_keyboard(lang))
@@ -1232,15 +1173,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     lang = await get_user_lang(update)
     user_name = context.user_data.get("name") or user.first_name or ("Пользователь" if lang == 'ru' else "User")
-    
     family_id = get_family_id_for_user(user_id)
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     photo = update.message.photo[-1]
     caption = update.message.caption or ""
-    
     save_media(family_id, user_id, user_name, "photo", photo.file_id, caption)
     await update.message.reply_text(get_text(lang, 'photo_saved'), reply_markup=get_main_menu_keyboard(lang))
 
@@ -1249,15 +1187,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     lang = await get_user_lang(update)
     user_name = context.user_data.get("name") or user.first_name or ("Пользователь" if lang == 'ru' else "User")
-    
     family_id = get_family_id_for_user(user_id)
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     video = update.message.video
     caption = update.message.caption or ""
-    
     save_media(family_id, user_id, user_name, "video", video.file_id, caption)
     await update.message.reply_text(get_text(lang, 'video_saved'), reply_markup=get_main_menu_keyboard(lang))
 
@@ -1268,12 +1203,10 @@ async def show_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not family_id:
         await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     media_list = get_family_media(family_id, limit=10)
     if not media_list:
         await update.message.reply_text(get_text(lang, 'album_empty'), reply_markup=get_main_menu_keyboard(lang))
         return
-    
     for media in media_list:
         date_str = str(media['date'])[:16]
         if media['caption']:
@@ -1290,20 +1223,16 @@ async def show_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_birthday_greetings(context: ContextTypes.DEFAULT_TYPE):
     today = date.today().isoformat()
     birthdays = get_birthdays_for_date(today)
-    
     for bday in birthdays:
         target_id = bday['target_user_id'] if bday['target_user_id'] else bday['user_id']
         user_info = get_user(target_id)
         name = user_info['name'] if user_info else f"User_{target_id}"
         lang = get_user_language(target_id)
-        
         greeting = get_text(lang, 'birthday_greeting', name=name)
-        
         try:
             await context.bot.send_message(chat_id=target_id, text=greeting, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Не удалось отправить поздравление {target_id}: {e}")
-        
         family_id = get_family_id_for_user(target_id)
         if family_id:
             feed_lang = get_user_language(family_id) if get_user_language(family_id) else 'ru'
@@ -1312,15 +1241,288 @@ async def send_birthday_greetings(context: ContextTypes.DEFAULT_TYPE):
             await notify_family_members(family_id, target_id, context.bot, notification)
 
 
+# ---------- Медицинский дневник ----------
+async def health_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    keyboard = [
+        ["📝 Добавить запись", "📊 Статистика"],
+        ["📋 Мои записи", "📈 Графики"],
+        ["🔙 Назад"]
+    ]
+    if lang == 'en':
+        keyboard = [
+            ["📝 Add record", "📊 Statistics"],
+            ["📋 My records", "📈 Charts"],
+            ["🔙 Back"]
+        ]
+    await update.message.reply_text(
+        "🏥 *Медицинский дневник*\n\nВыберите действие:" if lang == 'ru' else "🏥 *Health diary*\n\nChoose action:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode="Markdown"
+    )
+    return HealthState.CHOOSE.value
+
+async def health_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    text = update.message.text
+    if text in ["📝 Добавить запись", "📝 Add record"]:
+        await update.message.reply_text("Введите дату в формате ГГГГ-ММ-ДД (например, 2025-12-31):" if lang == 'ru' else "Enter date in YYYY-MM-DD format (e.g., 2025-12-31):")
+        return HealthState.DATE.value
+    elif text in ["📊 Статистика", "📊 Statistics"]:
+        await health_stats(update, context)
+        return -1
+    elif text in ["📋 Мои записи", "📋 My records"]:
+        await health_list(update, context)
+        return -1
+    elif text in ["📈 Графики", "📈 Charts"]:
+        await health_chart(update, context)
+        return -1
+    elif text in ["🔙 Назад", "🔙 Back"]:
+        await update.message.reply_text("Возврат в главное меню." if lang == 'ru' else "Back to main menu.", reply_markup=get_main_menu_keyboard(lang))
+        return -1
+    return -1
+
+async def health_add_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    date_str = update.message.text.strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        await update.message.reply_text("❌ Неверный формат. Используйте ГГГГ-ММ-ДД." if lang == 'ru' else "❌ Invalid format. Use YYYY-MM-DD.")
+        return HealthState.DATE.value
+    context.user_data["health_date"] = date_str
+    await update.message.reply_text("Введите время (ЧЧ:ММ) или '-' пропустить:" if lang == 'ru' else "Enter time (HH:MM) or '-' skip:")
+    return HealthState.TIME.value
+
+async def health_add_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    time_str = update.message.text.strip()
+    if time_str == "-":
+        context.user_data["health_time"] = None
+    elif re.match(r'^\d{2}:\d{2}$', time_str):
+        context.user_data["health_time"] = time_str
+    else:
+        await update.message.reply_text("❌ Неверный формат. Введите ЧЧ:ММ или '-'." if lang == 'ru' else "❌ Invalid format. Enter HH:MM or '-'.")
+        return HealthState.TIME.value
+    await update.message.reply_text("Введите верхнее давление (систолическое) или '-' пропустить:" if lang == 'ru' else "Enter systolic pressure or '-' skip:")
+    return HealthState.SYSTOLIC.value
+
+async def health_add_systolic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_systolic"] = None
+    elif val.isdigit():
+        context.user_data["health_systolic"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'." if lang == 'ru' else "Enter a number or '-'.")
+        return HealthState.SYSTOLIC.value
+    await update.message.reply_text("Введите нижнее давление (диастолическое) или '-' пропустить:" if lang == 'ru' else "Enter diastolic pressure or '-' skip:")
+    return HealthState.DIASTOLIC.value
+
+async def health_add_diastolic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_diastolic"] = None
+    elif val.isdigit():
+        context.user_data["health_diastolic"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'." if lang == 'ru' else "Enter a number or '-'.")
+        return HealthState.DIASTOLIC.value
+    await update.message.reply_text("Введите пульс или '-' пропустить:" if lang == 'ru' else "Enter pulse or '-' skip:")
+    return HealthState.PULSE.value
+
+async def health_add_pulse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_pulse"] = None
+    elif val.isdigit():
+        context.user_data["health_pulse"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'." if lang == 'ru' else "Enter a number or '-'.")
+        return HealthState.PULSE.value
+    await update.message.reply_text("Введите уровень сахара (ммоль/л) или '-' пропустить:" if lang == 'ru' else "Enter blood sugar (mmol/L) or '-' skip:")
+    return HealthState.SUGAR.value
+
+async def health_add_sugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_sugar"] = None
+    else:
+        try:
+            context.user_data["health_sugar"] = float(val)
+        except:
+            await update.message.reply_text("Введите число (например, 5.6) или '-'." if lang == 'ru' else "Enter a number (e.g., 5.6) or '-'.")
+            return HealthState.SUGAR.value
+    await update.message.reply_text("Введите вес (кг) или '-' пропустить:" if lang == 'ru' else "Enter weight (kg) or '-' skip:")
+    return HealthState.WEIGHT.value
+
+async def health_add_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_weight"] = None
+    else:
+        try:
+            context.user_data["health_weight"] = float(val)
+        except:
+            await update.message.reply_text("Введите число (например, 70.5) или '-'." if lang == 'ru' else "Enter a number (e.g., 70.5) or '-'.")
+            return HealthState.WEIGHT.value
+    await update.message.reply_text("Введите заметки (или '-' пропустить):" if lang == 'ru' else "Enter notes (or '-' skip):")
+    return HealthState.NOTES.value
+
+async def health_add_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    notes = update.message.text.strip()
+    if notes == "-":
+        notes = None
+    user_id = update.effective_user.id
+    add_health_record(
+        user_id=user_id,
+        record_date=context.user_data["health_date"],
+        record_time=context.user_data.get("health_time"),
+        systolic=context.user_data.get("health_systolic"),
+        diastolic=context.user_data.get("health_diastolic"),
+        pulse=context.user_data.get("health_pulse"),
+        blood_sugar=context.user_data.get("health_sugar"),
+        weight=context.user_data.get("health_weight"),
+        notes=notes
+    )
+    await update.message.reply_text("✅ Запись добавлена в медицинский дневник!" if lang == 'ru' else "✅ Record added to health diary!", reply_markup=get_main_menu_keyboard(lang))
+    context.user_data.clear()
+    return -1
+
+async def health_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    stats = get_health_stats(user_id, days=30)
+    if not stats or stats['records_count'] == 0:
+        await update.message.reply_text("Нет медицинских записей за последние 30 дней." if lang == 'ru' else "No health records for the last 30 days.")
+        return
+    text = f"📊 *{'Статистика за последние 30 дней' if lang == 'ru' else 'Statistics for last 30 days'}*\n\n"
+    if stats['systolic_avg']:
+        text += f"💓 {'Давление' if lang == 'ru' else 'Pressure'}: {stats['systolic_avg']:.0f}/{stats['diastolic_avg']:.0f} ({'среднее' if lang == 'ru' else 'avg'})\n"
+        text += f"   {'Последнее' if lang == 'ru' else 'Last'}: {stats['last_systolic']}/{stats['last_diastolic']}\n"
+    if stats['pulse_avg']:
+        text += f"💗 {'Пульс' if lang == 'ru' else 'Pulse'}: {stats['pulse_avg']:.0f} ({'среднее' if lang == 'ru' else 'avg'}), {'последний' if lang == 'ru' else 'last'}: {stats['last_pulse']}\n"
+    if stats['sugar_avg']:
+        text += f"🩸 {'Сахар' if lang == 'ru' else 'Sugar'}: {stats['sugar_avg']:.1f} ({'среднее' if lang == 'ru' else 'avg'}), {'последний' if lang == 'ru' else 'last'}: {stats['last_sugar']}\n"
+    if stats['weight_avg']:
+        text += f"⚖️ {'Вес' if lang == 'ru' else 'Weight'}: {stats['weight_avg']:.1f} кг ({'среднее' if lang == 'ru' else 'avg'}), {'последний' if lang == 'ru' else 'last'}: {stats['last_weight']}\n"
+    text += f"\n📝 {'Всего записей' if lang == 'ru' else 'Total records'}: {stats['records_count']}"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def health_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    records = get_health_records(user_id, days=30)
+    if not records:
+        await update.message.reply_text("Нет записей." if lang == 'ru' else "No records.")
+        return
+    lines = ["📋 *Ваши медицинские записи (последние 10)*\n" if lang == 'ru' else "📋 *Your health records (last 10)*\n"]
+    for r in records[:10]:
+        time_str = f" {r['time']}" if r['time'] else ""
+        lines.append(f"📅 {r['date']}{time_str}")
+        if r['systolic'] and r['diastolic']:
+            lines.append(f"   {'Давление' if lang == 'ru' else 'Pressure'}: {r['systolic']}/{r['diastolic']}")
+        if r['pulse']:
+            lines.append(f"   {'Пульс' if lang == 'ru' else 'Pulse'}: {r['pulse']}")
+        if r['blood_sugar']:
+            lines.append(f"   {'Сахар' if lang == 'ru' else 'Sugar'}: {r['blood_sugar']}")
+        if r['weight']:
+            lines.append(f"   {'Вес' if lang == 'ru' else 'Weight'}: {r['weight']} кг")
+        if r['notes']:
+            lines.append(f"   📝 {r['notes']}")
+        lines.append("")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def health_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    records = get_health_records(user_id, days=30)
+    if not records:
+        await update.message.reply_text("Нет данных для графика." if lang == 'ru' else "No data for chart.")
+        return
+    records_sorted = sorted(records, key=lambda x: x['date'])
+    dates = [r['date'] for r in records_sorted]
+    systolic = [r['systolic'] for r in records_sorted if r['systolic']]
+    diastolic = [r['diastolic'] for r in records_sorted if r['diastolic']]
+    if not systolic and not diastolic:
+        await update.message.reply_text("Нет данных о давлении." if lang == 'ru' else "No blood pressure data.")
+        return
+    try:
+        import matplotlib.pyplot as plt
+        import io
+        plt.figure(figsize=(10,5))
+        if systolic:
+            plt.plot(dates, systolic, marker='o', label='Systolic' if lang == 'en' else 'Верхнее')
+        if diastolic:
+            plt.plot(dates, diastolic, marker='s', label='Diastolic' if lang == 'en' else 'Нижнее')
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.title('Blood pressure dynamics' if lang == 'en' else 'Динамика давления')
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        await update.message.reply_photo(photo=buf, caption="📈 Blood pressure chart" if lang == 'en' else "📈 График давления")
+        plt.close()
+    except ImportError:
+        await update.message.reply_text("⚠️ Для графиков требуется библиотека matplotlib. Установите её." if lang == 'ru' else "⚠️ Matplotlib is required for charts. Please install it.")
+
+
+# ---------- Экспорт данных ----------
+async def export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    keyboard = [
+        ["📋 История диалогов", "🏥 Медицинские записи"],
+        ["👨‍👩‍👧 Семейная лента", "🔙 Назад"]
+    ]
+    if lang == 'en':
+        keyboard = [
+            ["📋 Chat history", "🏥 Health records"],
+            ["👨‍👩‍👧 Family feed", "🔙 Back"]
+        ]
+    await update.message.reply_text(
+        "📁 *Экспорт данных*\n\nВыберите, что экспортировать:" if lang == 'ru' else "📁 *Data export*\n\nChoose what to export:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode="Markdown"
+    )
+    return ExportState.CHOOSE.value
+
+async def export_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    if choice in ["📋 История диалогов", "📋 Chat history"]:
+        csv_data = export_chat_history(user_id)
+        await update.message.reply_document(document=io.BytesIO(csv_data.encode('utf-8')), filename="chat_history.csv")
+    elif choice in ["🏥 Медицинские записи", "🏥 Health records"]:
+        csv_data = export_health_records(user_id)
+        await update.message.reply_document(document=io.BytesIO(csv_data.encode('utf-8')), filename="health_records.csv")
+    elif choice in ["👨‍👩‍👧 Семейная лента", "👨‍👩‍👧 Family feed"]:
+        family_id = get_family_id_for_user(user_id)
+        if family_id:
+            csv_data = export_family_feed(family_id)
+            await update.message.reply_document(document=io.BytesIO(csv_data.encode('utf-8')), filename="family_feed.csv")
+        else:
+            await update.message.reply_text(get_text(lang, 'not_relative'), reply_markup=get_main_menu_keyboard(lang))
+    elif choice in ["🔙 Назад", "🔙 Back"]:
+        await update.message.reply_text("Возврат в главное меню." if lang == 'ru' else "Back to main menu.", reply_markup=get_main_menu_keyboard(lang))
+        return -1
+    return -1
+
+
 # ---------- Команда смены языка ----------
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    lang = get_user_language(user_id)
     if not context.args:
-        await update.message.reply_text("📝 Использование: /lang ru или /lang en" if get_user_language(user_id) == 'ru' else "📝 Usage: /lang ru or /lang en")
+        await update.message.reply_text(get_text(lang, 'lang_usage'))
         return
     new_lang = context.args[0].lower()
     if new_lang not in ['ru', 'en']:
-        await update.message.reply_text("❌ Поддерживаются языки: ru, en" if get_user_language(user_id) == 'ru' else "❌ Supported languages: ru, en")
+        await update.message.reply_text(get_text(lang, 'lang_invalid'))
         return
     set_user_language(user_id, new_lang)
     await update.message.reply_text(get_text(new_lang, 'lang_changed'), reply_markup=get_main_menu_keyboard(new_lang))
@@ -1329,39 +1531,28 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Дополнительные команды ----------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
-
 async def volunteers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_volunteers_info())
-
 async def health_extra_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(health_extra_info())
-
 async def helper_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(home_helper_info())
-
 async def nostalgia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(nostalgia_menu_text())
-
 async def courses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(courses_menu_text())
-
 async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(achievements_text())
-
 async def admin_analytics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(analytics_info_text())
-
 async def voice_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(voice_interface_info())
-
 async def clear_history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
     clear_chat_history(user_id)
     await update.message.reply_text("🧹 История диалогов очищена!" if lang == 'ru' else "🧹 Chat history cleared!", reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Навигация ----------
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = await get_user_lang(update)
     await update.message.reply_text(get_text(lang, 'help_text'), parse_mode="Markdown", reply_markup=get_main_menu_keyboard(lang))
@@ -1370,8 +1561,6 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = await get_user_lang(update)
     await update.message.reply_text(get_text(lang, 'menu'), reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Погода ----------
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     lang = await get_user_lang(update)
@@ -1384,13 +1573,8 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not summary:
         await update.message.reply_text(get_text(lang, 'weather_error'), reply_markup=get_main_menu_keyboard(lang))
         return
-    await update.message.reply_text(
-        get_text(lang, 'weather_forecast', name=name, summary=summary),
-        reply_markup=get_main_menu_keyboard(lang),
-    )
+    await update.message.reply_text(get_text(lang, 'weather_forecast', name=name, summary=summary), reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Установка города ----------
 async def set_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -1413,6 +1597,7 @@ def build_application():
     init_calendar_table()
     init_games_table()
     init_media_table()
+    init_health_table()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -1466,6 +1651,35 @@ def build_application():
     )
     application.add_handler(event_conv)
 
+    # Медицинский дневник
+    health_conv = ConversationHandler(
+        entry_points=[CommandHandler("health", health_menu)],
+        states={
+            HealthState.CHOOSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_menu_router)],
+            HealthState.DATE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_date)],
+            HealthState.TIME.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_time)],
+            HealthState.SYSTOLIC.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_systolic)],
+            HealthState.DIASTOLIC.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_diastolic)],
+            HealthState.PULSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_pulse)],
+            HealthState.SUGAR.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_sugar)],
+            HealthState.WEIGHT.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_weight)],
+            HealthState.NOTES.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, health_add_notes)],
+        },
+        fallbacks=[CommandHandler("cancel", meds_cancel)],
+    )
+    application.add_handler(health_conv)
+    application.add_handler(CommandHandler("health_stats", health_stats))
+    application.add_handler(CommandHandler("health_list", health_list))
+    application.add_handler(CommandHandler("health_chart", health_chart))
+
+    # Экспорт данных
+    export_conv = ConversationHandler(
+        entry_points=[CommandHandler("export", export_menu)],
+        states={ExportState.CHOOSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, export_choice)]},
+        fallbacks=[CommandHandler("cancel", meds_cancel)],
+    )
+    application.add_handler(export_conv)
+
     # Основные команды
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
@@ -1511,10 +1725,10 @@ def build_application():
     ]:
         application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
 
-    # Установка города (обработка фразы)
+    # Установка города
     application.add_handler(MessageHandler(filters.Regex(r'(мой город|живу в|город|my city|i live in)'), set_city))
 
-    # Маршрутизация главного меню
+    # Маршрутизация главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text), group=3)
 
@@ -1527,14 +1741,14 @@ def build_application():
             for ev in today_events:
                 time_msg = f" в {ev['time']}" if ev['time'] else ""
                 lang = get_user_language(ev['user_id'])
-                text = f"🔔 *Напоминание о событии сегодня{time_msg}:*\n{ev['title']}\n{ev['description'] or ''}"
+                text = f"🔔 *{'Напоминание о событии сегодня' if lang == 'ru' else 'Reminder of event today'}{time_msg}:*\n{ev['title']}\n{ev['description'] or ''}"
                 await context.bot.send_message(chat_id=ev['user_id'], text=text, parse_mode="Markdown")
             tomorrow = today + timedelta(days=1)
             tomorrow_events = get_events_by_date(tomorrow.isoformat())
             for ev in tomorrow_events:
                 if ev['remind_before_days'] >= 1:
                     lang = get_user_language(ev['user_id'])
-                    text = f"📅 *Напоминание:* завтра событие «{ev['title']}»."
+                    text = f"📅 *{'Напоминание:' if lang == 'ru' else 'Reminder:'}* {'завтра событие' if lang == 'ru' else 'tomorrow event'} «{ev['title']}»."
                     await context.bot.send_message(chat_id=ev['user_id'], text=text, parse_mode="Markdown")
         job_queue.run_daily(daily_event_reminder, time=time(hour=9, minute=0))
         job_queue.run_daily(send_birthday_greetings, time=time(hour=9, minute=5))
@@ -1542,6 +1756,7 @@ def build_application():
     return application
 
 
+# ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
