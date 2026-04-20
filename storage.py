@@ -182,6 +182,23 @@ def get_user(telegram_id):
         return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
     return None
 
+def set_user_language(telegram_id, lang):
+    """Сохраняет язык пользователя (ru/en) – нужно добавить колонку в users"""
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
+    cursor.execute("UPDATE users SET language = ? WHERE telegram_id = ?", (lang, telegram_id))
+    conn.commit()
+    conn.close()
+
+def get_user_language(telegram_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT language FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else 'ru'
+
 
 # ---------- Напоминания ----------
 def add_reminder(telegram_id, kind, text, time_local):
