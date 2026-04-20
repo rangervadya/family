@@ -1,4 +1,6 @@
 import sqlite3
+import csv
+import io
 from datetime import datetime
 
 # ---------- Инициализация основных таблиц ----------
@@ -116,7 +118,6 @@ def init_calendar_table():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Добавляем колонку target_user_id, если её нет (миграция)
     cursor.execute("PRAGMA table_info(calendar_events)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'target_user_id' not in columns:
@@ -160,6 +161,28 @@ def init_media_table():
     conn.commit()
     conn.close()
 
+def init_health_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS health_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            record_date TEXT NOT NULL,
+            record_time TEXT,
+            systolic INTEGER,
+            diastolic INTEGER,
+            pulse INTEGER,
+            blood_sugar REAL,
+            weight REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date)")
+    conn.commit()
+    conn.close()
+
 
 # ---------- Пользователи ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
@@ -183,10 +206,8 @@ def get_user(telegram_id):
     return None
 
 def set_user_language(telegram_id, lang):
-    """Сохраняет язык пользователя (ru/en) – добавляет колонку, если её нет."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
-    # Проверяем, существует ли колонка language
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'language' not in columns:
@@ -196,7 +217,6 @@ def set_user_language(telegram_id, lang):
     conn.close()
 
 def get_user_language(telegram_id):
-    """Возвращает язык пользователя, по умолчанию 'ru'."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(users)")
@@ -442,11 +462,9 @@ def get_events_by_date(target_date: str) -> list:
     } for r in rows]
 
 def get_birthdays_for_date(target_date: str, family_id: int = None) -> list:
-    """Возвращает дни рождения на указанную дату для членов семьи."""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     if family_id:
-        # Получаем всех членов семьи
         cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
         relatives = [row[0] for row in cursor.fetchall()]
         relatives.append(family_id)
@@ -675,3 +693,90 @@ def get_family_media(family_id: int, limit: int = 20) -> list:
             "date": row[5]
         })
     return media_list
+
+
+# ---------- Медицинский дневник ----------
+def add_health_record(user_id, record_date, systolic=None, diastolic=None, pulse=None,
+                      blood_sugar=None, weight=None, notes=None, record_time=None):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO health_records (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes))
+    conn.commit()
+    conn.close()
+
+def get_health_records(user_id, days=30):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes, created_at
+        FROM health_records
+        WHERE user_id = ? AND record_date >= date('now', '-' || ? || ' days')
+        ORDER BY record_date DESC, record_time DESC
+    """, (user_id, days))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{
+        "id": r[0], "date": r[1], "time": r[2],
+        "systolic": r[3], "diastolic": r[4], "pulse": r[5],
+        "blood_sugar": r[6], "weight": r[7], "notes": r[8], "created_at": r[9]
+    } for r in rows]
+
+def get_health_stats(user_id, days=30):
+    records = get_health_records(user_id, days)
+    if not records:
+        return None
+    systolic_vals = [r['systolic'] for r in records if r['systolic']]
+    diastolic_vals = [r['diastolic'] for r in records if r['diastolic']]
+    pulse_vals = [r['pulse'] for r in records if r['pulse']]
+    sugar_vals = [r['blood_sugar'] for r in records if r['blood_sugar']]
+    weight_vals = [r['weight'] for r in records if r['weight']]
+    return {
+        "systolic_avg": sum(systolic_vals)/len(systolic_vals) if systolic_vals else None,
+        "diastolic_avg": sum(diastolic_vals)/len(diastolic_vals) if diastolic_vals else None,
+        "pulse_avg": sum(pulse_vals)/len(pulse_vals) if pulse_vals else None,
+        "sugar_avg": sum(sugar_vals)/len(sugar_vals) if sugar_vals else None,
+        "weight_avg": sum(weight_vals)/len(weight_vals) if weight_vals else None,
+        "last_systolic": systolic_vals[-1] if systolic_vals else None,
+        "last_diastolic": diastolic_vals[-1] if diastolic_vals else None,
+        "last_pulse": pulse_vals[-1] if pulse_vals else None,
+        "last_sugar": sugar_vals[-1] if sugar_vals else None,
+        "last_weight": weight_vals[-1] if weight_vals else None,
+        "records_count": len(records)
+    }
+
+
+# ---------- Экспорт данных в CSV ----------
+def export_chat_history(user_id):
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT role, message, created_at FROM chat_history WHERE user_id = ? ORDER BY created_at", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Роль", "Сообщение", "Дата и время"])
+    for row in rows:
+        writer.writerow(row)
+    return output.getvalue()
+
+def export_health_records(user_id):
+    records = get_health_records(user_id, days=365)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Дата", "Время", "Давление (верх/низ)", "Пульс", "Сахар", "Вес", "Заметки"])
+    for r in records:
+        bp = f"{r['systolic']}/{r['diastolic']}" if r['systolic'] and r['diastolic'] else ""
+        writer.writerow([r['date'], r['time'] or "", bp, r['pulse'] or "", r['blood_sugar'] or "", r['weight'] or "", r['notes'] or ""])
+    return output.getvalue()
+
+def export_family_feed(family_id):
+    feed = get_family_feed(family_id, limit=1000)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Автор", "Сообщение", "Тип", "Дата"])
+    for f in feed:
+        writer.writerow([f['author_name'], f['message'], f['message_type'], f['created_at']])
+    return output.getvalue()
