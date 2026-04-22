@@ -25,19 +25,55 @@ from telegram.error import NetworkError, TimedOut, BadRequest
 from bot_config import get_settings
 from ai_stubs import generate_companion_reply
 from storage import (
-    init_db, upsert_user, list_reminders, add_reminder, log_activity,
-    get_activity_summary, add_relative_link, get_relatives_for_senior,
-    init_chat_history_table, save_message, clear_chat_history,
-    init_family_feed_table, get_family_id_for_user, add_to_family_feed, get_family_feed,
-    init_calendar_table, add_event, get_events_for_user, delete_event, get_events_by_date,
-    init_games_table, save_game_state, get_game_state, clear_game_state,
-    init_media_table, save_media, get_family_media,
+    init_db,
+    upsert_user,
+    list_reminders,
+    add_reminder,
+    log_activity,
+    get_activity_summary,
+    add_relative_link,
+    get_relatives_for_senior,
+    init_chat_history_table,
+    save_message,
+    clear_chat_history,
+    init_family_feed_table,
+    get_family_id_for_user,
+    add_to_family_feed,
+    get_family_feed,
+    init_calendar_table,
+    add_event,
+    get_events_for_user,
+    delete_event,
+    get_events_by_date,
+    init_games_table,
+    save_game_state,
+    get_game_state,
+    clear_game_state,
+    init_media_table,
+    save_media,
+    get_family_media,
     get_birthdays_for_date,
-    get_user_language, set_user_language,
-    init_health_table, add_health_record, get_health_records, get_health_stats,
-    export_chat_history, export_health_records, export_family_feed,
-    init_budget_table, add_transaction, get_transactions, get_budget_summary, get_categories, get_category_breakdown,
-    init_premium_tables, is_premium, add_premium_user, generate_code, activate_code, get_premium_expiry,
+    get_user_language,
+    set_user_language,
+    init_health_table,
+    add_health_record,
+    get_health_records,
+    get_health_stats,
+    export_chat_history,
+    export_health_records,
+    export_family_feed,
+    init_budget_table,
+    add_transaction,
+    get_transactions,
+    get_budget_summary,
+    get_categories,
+    get_category_breakdown,
+    init_premium_tables,
+    is_premium,
+    add_premium_user,
+    generate_code,
+    activate_code,
+    get_premium_expiry,
     get_user
 )
 from weather import get_weather_summary
@@ -139,7 +175,7 @@ async def get_user_lang(update):
         set_user_language(uid, lang)
     return lang
 
-# ---------- ОНБОРДИНГ (исправлен) ----------
+# ---------- ОНБОРДИНГ ----------
 async def start(update, context):
     lang = await get_user_lang(update)
     keyboard = [["Я пользователь", "Я родственник"]]
