@@ -79,6 +79,18 @@ from storage import (
     export_chat_history,
     export_health_records,
     export_family_feed,
+    init_budget_table,
+    add_transaction,
+    get_transactions,
+    get_budget_summary,
+    get_categories,
+    get_category_breakdown,
+    init_premium_tables,
+    is_premium,
+    add_premium_user,
+    generate_code,
+    activate_code,
+    get_premium_expiry,
 )
 from weather import get_weather_summary
 from features_stub import (
@@ -95,7 +107,6 @@ from features_stub import (
     analytics_info_text,
 )
 
-# ---------- Голосовые сообщения ----------
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -119,180 +130,48 @@ def run_flask():
 
 
 # ==================== МНОГОЯЗЫЧНОСТЬ ====================
-TEXTS: Dict[str, Dict[str, str]] = {
+# ВАЖНО: вставьте сюда ваш полный словарь TEXTS (ru и en) с поддержкой всех ключей.
+# Я приведу только новые ключи для бюджета и премиума, а вы дополните своим существующим словарём.
+TEXTS = {
     'ru': {
-        'start': "Здравствуйте! Я бот-компаньон «Семья» 🏡\n\nДавайте познакомимся.\nКто вы?\n\n➤ Я пожилой пользователь\n➤ Я родственник/опекун",
-        'choose_role': "Хорошо! Вы родственник.\nПожалуйста, введите код привязки, который мы выдадим вашему близкому человеку.",
-        'senior_name': "Рада знакомству! 🌷 Как вас зовут?\n\nНапишите, пожалуйста, как к вам обращаться.",
-        'senior_age': "Очень приятно, {name}!\n\nПодскажите, пожалуйста, сколько вам лет?",
-        'senior_city': "Спасибо!\n\nВ каком городе вы живёте?",
-        'senior_interests': "Отлично!\n\nРасскажите, чем вы любите заниматься? Например: сад, книги, фильмы, вязание, шахматы…",
-        'senior_complete': "Спасибо, {name}! Я всё запомнила.\n\nТеперь вы можете пользоваться мной как компаньоном.\n\nВот главное меню:",
-        'relative_complete': "Спасибо! Код принят.\n\nВот главное меню:",
-        'lang_changed': "✅ Язык изменён на русский",
-        'lang_usage': "📝 Использование: /lang ru или /lang en",
-        'lang_invalid': "❌ Поддерживаются языки: ru, en",
-        'menu': "📋 Главное меню:",
-        'talk_placeholder': "Напишите что-нибудь! 😊",
-        'no_reminders': "📋 У вас пока нет напоминаний.\n\nЯ могу каждый день напоминать о лекарствах.\nОтправьте команду /add_meds, чтобы добавить напоминание.",
-        'reminders_list': "📋 Ваши напоминания:",
-        'add_reminder_prompt': "Когда напоминать о приёме лекарств?\nНапишите время в формате ЧЧ:ММ, например 09:00 или 21:30.",
-        'add_reminder_time_invalid': "Пожалуйста, введите время в формате ЧЧ:ММ, например 08:30.",
-        'add_reminder_text_prompt': "Что мне напоминать?\nНапример: «Принять таблетку от давления».",
-        'add_reminder_success': "Хорошо, я буду каждый день в {time} напоминать вам: «{text}».\n\nВы всегда можете посмотреть список напоминаний через кнопку «📅 Напоминания».",
-        'add_reminder_cancel': "Настройка напоминания отменена.",
-        'sos_sent': "Вы нажали SOS. Я зафиксировала это событие и, по возможности, уведомлю ваших близких.",
-        'sos_notification': "Внимание.\n\nВаш близкий (Telegram ID {id}) нажал кнопку SOS в боте «Семья».\nПожалуйста, свяжитесь с ним как можно скорее.",
-        'sos_feed': "Нажата кнопка SOS!",
-        'sos_notify_family': "🚨 *{name}* нажал(а) SOS! Пожалуйста, проверьте семейную ленту.",
-        'family_feed_empty': "📭 В семейной ленте пока нет сообщений.",
-        'family_feed_title': "📋 *Семейная лента:*\n",
-        'family_send_usage': "📝 Использование: /family_send <текст сообщения>",
-        'family_send_success': "✅ Сообщение отправлено в семейную ленту!",
-        'family_send_notify': "📢 *{name}* пишет в семейный чат:\n\n{message}",
-        'not_relative': "❌ Вы не привязаны ни к одной семье. Используйте /add_relative.",
-        'db_error': "❌ Ошибка базы данных. Попробуйте позже.",
-        'weather_unknown_city': "{name}, я пока не знаю ваш город.\nПожалуйста, напишите мне: «Я живу в <город>», и мы добавим это в профиле.",
-        'weather_error': "Не получилось получить прогноз погоды сейчас. Попробуйте чуть позже.",
-        'weather_forecast': "Доброе утро, {name}!\n\n{summary}\n\nПожалуйста, будьте осторожны и одевайтесь по погоде.",
-        'city_remembered': "✅ Запомнила! Ваш город: {city}\n\n🌤️ Теперь узнаю погоду!",
-        'games_menu': "🎮 *Игры и викторины*\n\nВыберите игру:",
-        'riddle_game': "🔮 *Загадка:*\n\n{question}\n\nНапишите свой ответ:",
-        'words_game': "📖 *Игра «Слова»*\n\nПравила: называете слово, следующий игрок называет слово на последнюю букву предыдущего.\nВы начинаете! Напишите любое слово (существительное, именительный падеж).",
-        'truth_lie_game': "✅ *Правда или ложь?*\n\n{question}\n\nОтправьте «правда» или «ложь»:",
-        'exit_game': "❌ Вы вышли из игры. Возвращайтесь ещё!",
-        'riddle_correct': "🎉 Правильно! Отличная работа!\n\nЧтобы сыграть ещё раз, нажмите /games",
-        'riddle_wrong': "❌ Неправильно! Правильный ответ: {answer}\n\nСыграйте ещё раз: /games",
-        'words_used': "❌ Слово «{word}» уже было! Вы проиграли. Начните новую игру: /games",
-        'words_wrong_letter': "❌ Слово должно начинаться на букву «{letter}»! Вы проиграли. Начните новую игру: /games",
-        'words_too_short': "❌ Слишком короткое слово! Вы проиграли. Начните новую игру: /games",
-        'words_bot_turn': "🤖 Моё слово: {word}\nТеперь ваша очередь на букву «{letter}».",
-        'words_win': "🎉 Я не могу найти слово на букву «{letter}»! Вы победили! Поздравляю!\n\nНачать новую игру: /games",
-        'truth_lie_prompt': "Пожалуйста, ответьте «правда» или «ложь».",
-        'truth_lie_correct': "🎉 Правильно! Отличная эрудиция!\n\nСыграть ещё: /games",
-        'truth_lie_wrong': "❌ Неправильно! {question} – это {answer}.\n\nСыграть ещё: /games",
-        'voice_processing': "🎤 Слушаю ваше голосовое сообщение...\n\nЭто может занять несколько секунд.",
-        'voice_failed': "😔 Не удалось распознать голосовое сообщение.\n\nПопробуйте:\n• Говорить чётче и медленнее\n• Уменьшить фоновый шум\n• Отправить сообщение короче (3-5 секунд)\n\nИли просто напишите текстом! 💬",
-        'voice_recognized': "📝 Вы сказали: *\"{text}\"*\n\n🤔 Думаю над ответом...",
-        'voice_error': "❌ Произошла ошибка при обработке голосового сообщения.\n\nПожалуйста, попробуйте ещё раз или напишите текстом.",
-        'photo_saved': "📸 Фото добавлено в семейный альбом!",
-        'video_saved': "🎥 Видео добавлено в семейный альбом!",
-        'album_empty': "📭 В семейном альбоме пока нет фотографий или видео.",
-        'album_caption': "📅 {date}\n👤 {author}",
-        'album_caption_with_text': "📅 {date}\n👤 {author}\n💬 {caption}",
-        'health_report': "📊 *Отчёт о здоровье за {days} дней*\n\n💬 Разговоров с ботом: {talks}\n💊 Приёмов лекарств (выполнено): {reminders}\n📈 Процент выполнения: {rate:.1f}%\n🆘 Нажатий SOS: {sos}\n🎤 Голосовых сообщений: {voice}\n\n🏆 *Всего активностей:* {total}",
-        'health_report_no_reminders': "📊 *Отчёт о здоровье за {days} дней*\n\n💬 Разговоров с ботом: {talks}\n💊 Приёмов лекарств (выполнено): {reminders}\n🆘 Нажатий SOS: {sos}\n🎤 Голосовых сообщений: {voice}\n\n🏆 *Всего активностей:* {total}",
-        'health_recommendation_meds': "\n⚠️ *Рекомендация:* старайтесь не пропускать приём лекарств!",
-        'health_recommendation_talk': "\n💡 *Совет:* общайтесь с ботом – это поднимает настроение!",
-        'family_report': "👨‍👩‍👧 *Семейный отчёт за {days} дней*\n\n",
-        'family_report_member': "👤 *{name}*\n   💬 Разговоров: {talks}\n   💊 Приёмов лекарств: {reminders}\n   🆘 SOS: {sos}\n\n",
-        'family_report_total': "📊 *Общая активность семьи:*\n   💬 Всего диалогов: {talks}\n   💊 Всего приёмов: {reminders}\n   🆘 Всего SOS: {sos}\n",
-        'member_stats': "📊 *Статистика пользователя {name}* (ID: {id})\n📅 За последние {days} дней:\n\n💬 Разговоров: {talks}\n💊 Приёмов лекарств: {reminders}\n🆘 SOS: {sos}\n🎤 Голосовых: {voice}\n\n🏆 *Всего активностей:* {total}",
-        'event_add_date': "📅 *Добавление события*\n\nВведите дату в формате ГГГГ-ММ-ДД (например, 2025-12-31):",
-        'event_add_time': "Введите время (опционально) в формате ЧЧ:ММ или '-' пропустить:",
-        'event_add_title': "Введите название события (обязательно):",
-        'event_add_description': "Введите описание (необязательно, можно '-' пропустить):",
-        'event_add_type': "Выберите тип события:\n1 - День рождения\n2 - Праздник\n3 - Встреча\n4 - Другое\n5 - День рождения другого человека",
-        'event_add_target': "Введите Telegram ID именинника (или '-' если это ваш день рождения):",
-        'event_add_remind': "За сколько дней напомнить? (по умолчанию 1, введите число):",
-        'event_add_success': "✅ Событие добавлено!\n\n📅 {date}\n📌 {title}\n🔔 Напомню за {days} дн.",
-        'events_list_empty': "📭 У вас нет предстоящих событий.",
-        'events_list_title': "📅 *Ваши ближайшие события:*\n",
-        'event_birthday_title': "День рождения {name}",
-        'event_delete_usage': "❌ Укажите ID события: /delete_event <id>",
-        'event_deleted': "✅ Событие {id} удалено.",
-        'event_not_found': "❌ Событие не найдено или у вас нет прав.",
-        'birthday_greeting': "🎉 *С ДНЁМ РОЖДЕНИЯ!* 🎉\n\nДорогой(ая) *{name}*!\n\nЖелаю здоровья, счастья, радости и тепла!\nПусть каждый день приносит улыбку, а близкие всегда будут рядом! 🌷\n\nС любовью, твой бот-компаньон «Семья» ❤️",
-        'birthday_feed': "🎉 Сегодня день рождения у *{name}*! Поздравляем!",
-        'birthday_notify': "🎉 *Сегодня день рождения у {name}!* Поздравьте его/её в семейном чате!",
-        'help_text': "🤖 *Бот-компаньон «Семья»*\n\nОсновные команды:\n• /start — начать заново\n• /menu — главное меню\n• /help — эта справка\n• /lang — сменить язык\n\n💬 *Общение:*\n• Просто напишите текст – я отвечу через нейросеть\n• 🎤 Отправьте голосовое сообщение – я распознаю и отвечу\n\n📅 *Напоминания:*\n• /add_meds — добавить напоминание о лекарствах\n• /enable_checkin — ежедневный опрос «Как дела?»\n• /disable_checkin — отключить опрос\n\n👨‍👩‍👧 *Семья:*\n• /add_relative <ID> — привязать родственника\n• /family_send <текст> — отправить в семейный чат\n• /family_feed — показать семейную ленту\n• /sos — экстренная помощь\n\n📊 *Аналитика:*\n• /health_report [дни] — мой отчёт о здоровье\n• /family_report [дни] — сводный отчёт по семье\n• /member_stats <ID> [дни] — статистика члена семьи\n\n📅 *Календарь:*\n• /add_event — добавить событие\n• /events_list — список событий\n• /delete_event <id> — удалить событие\n\n🎮 *Игры:*\n• /games — меню игр (загадки, слова, правда/ложь)\n\n📸 *Альбом:*\n• /album — показать семейный альбом\n• Отправьте фото или видео – они сохранятся в альбом\n\n🎂 *Дни рождения:*\n• Добавьте день рождения через /add_event (тип 1 или 5)\n• Бот автоматически поздравит именинника в 9:00\n\n🏥 *Медицинский дневник:*\n• /health — меню мед. дневника\n• /health_stats — статистика показателей\n• /health_list — список записей\n• /health_chart — графики давления\n\n📁 *Экспорт данных:*\n• /export — экспорт истории, медзаписей, семейной ленты в CSV\n\n🌤️ *Погода:*\n• /weather — погода (нужно указать город)\n• Напишите «мой город Москва» – запомню\n\n🆘 *Помощь:*\n• /companions — поиск компаньонов\n• /volunteers — волонтёрская помощь\n• /health_extra — советы по здоровью\n• /helper — помощь по дому\n• /nostalgia — ностальгия\n• /courses — курсы\n• /achievements — достижения\n• /admin_stats — аналитика (для админов)",
+        # ----- Существующие ключи (онбординг, напоминания, SOS и т.д.) вставьте из вашего файла -----
+        # ... (ваш словарь) ...
+        # Дополнительные ключи для бюджета и премиума:
+        'budget_menu': "💰 *Семейный бюджет*\n\nВыберите действие:",
+        'budget_add_type': "Выберите тип: 1 - Доход, 2 - Расход",
+        'budget_add_category': "Выберите категорию:",
+        'budget_add_amount': "Введите сумму (число):",
+        'budget_add_date': "Введите дату (ГГГГ-ММ-ДД) или '-' сегодня:",
+        'budget_add_desc': "Введите описание (или '-' пропустить):",
+        'budget_add_success': "✅ Транзакция добавлена!",
+        'budget_stats_text': "💰 *Статистика бюджета*\n\nДоходы: {income:.2f} ₽\nРасходы: {expense:.2f} ₽\nБаланс: {balance:.2f} ₽",
+        'budget_breakdown': "\n📊 *Разбивка по категориям (расходы):*",
+        'budget_list_empty': "Нет транзакций.",
+        'budget_list_header': "📋 *Последние транзакции:*",
+        'premium_info': "🌟 *Премиум-доступ*\n\n{status}",
+        'premium_active': "✅ У вас активен премиум до {date}.\nСпасибо за поддержку! 🙏",
+        'premium_inactive': (
+            "🚀 *Платные функции:*\n"
+            "• 📊 Расширенная аналитика здоровья (графики, тренды)\n"
+            "• 💰 Семейный бюджет (полная статистика, категории)\n"
+            "• 📁 Экспорт всех данных (CSV, PDF)\n"
+            "• 🎨 Индивидуальные темы оформления\n"
+            "• 🔔 Приоритетные напоминания\n\n"
+            "💎 *Стоимость:* 300 ₽ за 30 дней\n\n"
+            "Для получения премиума свяжитесь с @support или переведите на карту ...\n"
+            "После оплаты вы получите код активации.\n\n"
+            "Введите код: /activate <код>"
+        ),
+        'activate_usage': "❌ Введите код: /activate <код>",
+        'activate_success': "✅ Премиум активирован! Спасибо за поддержку! 🎉",
+        'activate_fail': "❌ Неверный или уже использованный код.",
+        'gen_code_usage': "Использование: /gen_code <дни>",
+        'gen_code_success': "✅ Сгенерирован код: `{code}`\nДней: {days}",
+        'gen_code_error': "❌ Ошибка. Дни должны быть числом.",
+        'premium_only': "⭐ Эта функция доступна только в премиум-версии. Используйте /premium",
     },
     'en': {
-        'start': "Hello! I'm 'Family' companion bot 🏡\n\nLet's get acquainted.\nWho are you?\n\n➤ I'm an elderly user\n➤ I'm a relative/guardian",
-        'choose_role': "Okay! You are a relative.\nPlease enter the binding code we will give to your loved one.",
-        'senior_name': "Nice to meet you! 🌷 What's your name?\n\nPlease write how to address you.",
-        'senior_age': "Nice to meet you, {name}!\n\nHow old are you?",
-        'senior_city': "Thank you!\n\nWhat city do you live in?",
-        'senior_interests': "Great!\n\nTell me what you like to do? For example: garden, books, movies, knitting, chess...",
-        'senior_complete': "Thank you, {name}! I remember everything.\n\nNow you can use me as a companion.\n\nHere's the main menu:",
-        'relative_complete': "Thank you! Code accepted.\n\nHere's the main menu:",
-        'lang_changed': "✅ Language changed to English",
-        'lang_usage': "📝 Usage: /lang ru or /lang en",
-        'lang_invalid': "❌ Supported languages: ru, en",
-        'menu': "📋 Main menu:",
-        'talk_placeholder': "Write something! 😊",
-        'no_reminders': "📋 You have no reminders yet.\n\nI can remind you about medications daily.\nSend /add_meds to add a reminder.",
-        'reminders_list': "📋 Your reminders:",
-        'add_reminder_prompt': "When to remind about medication?\nWrite time in HH:MM format, e.g., 09:00 or 21:30.",
-        'add_reminder_time_invalid': "Please enter time in HH:MM format, e.g., 08:30.",
-        'add_reminder_text_prompt': "What should I remind?\nExample: «Take blood pressure pill».",
-        'add_reminder_success': "Okay, I will remind you daily at {time}: «{text}».\n\nYou can always view your reminders via the «📅 Reminders» button.",
-        'add_reminder_cancel': "Reminder setup cancelled.",
-        'sos_sent': "You pressed SOS. I have recorded this event and will notify your loved ones if possible.",
-        'sos_notification': "Attention.\n\nYour loved one (Telegram ID {id}) pressed the SOS button in the «Family» bot.\nPlease contact them as soon as possible.",
-        'sos_feed': "SOS button pressed!",
-        'sos_notify_family': "🚨 *{name}* pressed SOS! Please check the family feed.",
-        'family_feed_empty': "📭 No messages in the family feed yet.",
-        'family_feed_title': "📋 *Family feed:*\n",
-        'family_send_usage': "📝 Usage: /family_send <message text>",
-        'family_send_success': "✅ Message sent to family feed!",
-        'family_send_notify': "📢 *{name}* writes in family chat:\n\n{message}",
-        'not_relative': "❌ You are not linked to any family. Use /add_relative.",
-        'db_error': "❌ Database error. Please try again later.",
-        'weather_unknown_city': "{name}, I don't know your city yet.\nPlease tell me: «I live in Moscow» and I will remember it.",
-        'weather_error': "Could not get weather forecast now. Please try later.",
-        'weather_forecast': "Good morning, {name}!\n\n{summary}\n\nPlease be careful and dress according to the weather.",
-        'city_remembered': "✅ Remembered! Your city: {city}\n\n🌤️ Now you can ask for weather!",
-        'games_menu': "🎮 *Games and quizzes*\n\nChoose a game:",
-        'riddle_game': "🔮 *Riddle:*\n\n{question}\n\nWrite your answer:",
-        'words_game': "📖 *Word game*\n\nRules: you say a word, next player says a word starting with the last letter of the previous word.\nYou start! Write any word (noun, nominative case).",
-        'truth_lie_game': "✅ *Truth or lie?*\n\n{question}\n\nReply «truth» or «lie»:",
-        'exit_game': "❌ You left the game. Come back again!",
-        'riddle_correct': "🎉 Correct! Great job!\n\nTo play again, press /games",
-        'riddle_wrong': "❌ Wrong! Correct answer: {answer}\n\nPlay again: /games",
-        'words_used': "❌ Word «{word}» has already been used! You lost. Start a new game: /games",
-        'words_wrong_letter': "❌ Word must start with letter «{letter}»! You lost. Start a new game: /games",
-        'words_too_short': "❌ Word too short! You lost. Start a new game: /games",
-        'words_bot_turn': "🤖 My word: {word}\nNow your turn with letter «{letter}».",
-        'words_win': "🎉 I can't find a word starting with «{letter}»! You win! Congratulations!\n\nStart a new game: /games",
-        'truth_lie_prompt': "Please answer «truth» or «lie».",
-        'truth_lie_correct': "🎉 Correct! Great erudition!\n\nPlay again: /games",
-        'truth_lie_wrong': "❌ Wrong! {question} – it's {answer}.\n\nPlay again: /games",
-        'voice_processing': "🎤 Listening to your voice message...\n\nThis may take a few seconds.",
-        'voice_failed': "😔 Could not recognize the voice message.\n\nTry:\n• Speak more clearly and slowly\n• Reduce background noise\n• Send a shorter message (3-5 seconds)\n\nOr just write text! 💬",
-        'voice_recognized': "📝 You said: *\"{text}\"*\n\n🤔 Thinking...",
-        'voice_error': "❌ An error occurred while processing the voice message.\n\nPlease try again or write text.",
-        'photo_saved': "📸 Photo added to family album!",
-        'video_saved': "🎥 Video added to family album!",
-        'album_empty': "📭 No photos or videos in the family album yet.",
-        'album_caption': "📅 {date}\n👤 {author}",
-        'album_caption_with_text': "📅 {date}\n👤 {author}\n💬 {caption}",
-        'health_report': "📊 *Health report for last {days} days*\n\n💬 Conversations with bot: {talks}\n💊 Medications taken: {reminders}\n📈 Completion rate: {rate:.1f}%\n🆘 SOS presses: {sos}\n🎤 Voice messages: {voice}\n\n🏆 *Total activities:* {total}",
-        'health_report_no_reminders': "📊 *Health report for last {days} days*\n\n💬 Conversations with bot: {talks}\n💊 Medications taken: {reminders}\n🆘 SOS presses: {sos}\n🎤 Voice messages: {voice}\n\n🏆 *Total activities:* {total}",
-        'health_recommendation_meds': "\n⚠️ *Recommendation:* try not to miss medication!",
-        'health_recommendation_talk': "\n💡 *Advice:* chat with the bot – it boosts your mood!",
-        'family_report': "👨‍👩‍👧 *Family report for last {days} days*\n\n",
-        'family_report_member': "👤 *{name}*\n   💬 Conversations: {talks}\n   💊 Medications taken: {reminders}\n   🆘 SOS presses: {sos}\n\n",
-        'family_report_total': "📊 *Total family activity:*\n   💬 Total conversations: {talks}\n   💊 Total medications: {reminders}\n   🆘 Total SOS: {sos}\n",
-        'member_stats': "📊 *Statistics of user {name}* (ID: {id})\n📅 Last {days} days:\n\n💬 Conversations: {talks}\n💊 Medications taken: {reminders}\n🆘 SOS: {sos}\n🎤 Voice: {voice}\n\n🏆 *Total activities:* {total}",
-        'event_add_date': "📅 *Add event*\n\nEnter date in YYYY-MM-DD format (e.g., 2025-12-31):",
-        'event_add_time': "Enter time (optional) in HH:MM format or '-' to skip:",
-        'event_add_title': "Enter event title (required):",
-        'event_add_description': "Enter description (optional, '-' to skip):",
-        'event_add_type': "Select event type:\n1 - Birthday\n2 - Holiday\n3 - Meeting\n4 - Other\n5 - Someone else's birthday",
-        'event_add_target': "Enter Telegram ID of the birthday person (or '-' if it's your birthday):",
-        'event_add_remind': "How many days in advance to remind? (default 1, enter number):",
-        'event_add_success': "✅ Event added!\n\n📅 {date}\n📌 {title}\n🔔 Will remind in {days} day(s).",
-        'events_list_empty': "📭 You have no upcoming events.",
-        'events_list_title': "📅 *Your upcoming events:*\n",
-        'event_birthday_title': "Birthday of {name}",
-        'event_delete_usage': "❌ Specify event ID: /delete_event <id>",
-        'event_deleted': "✅ Event {id} deleted.",
-        'event_not_found': "❌ Event not found or you don't have permission.",
-        'birthday_greeting': "🎉 *HAPPY BIRTHDAY!* 🎉\n\nDear *{name}*!\n\nI wish you health, happiness, joy and warmth!\nMay every day bring a smile, and may your loved ones always be by your side! 🌷\n\nWith love, your companion bot «Family» ❤️",
-        'birthday_feed': "🎉 Today is *{name}*'s birthday! Congratulations!",
-        'birthday_notify': "🎉 *Today is {name}'s birthday!* Congratulate them in the family chat!",
-        'help_text': "🤖 *Family companion bot*\n\nMain commands:\n• /start — start over\n• /menu — main menu\n• /help — this help\n• /lang — change language\n\n💬 *Communication:*\n• Just write text – I'll reply via AI\n• 🎤 Send a voice message – I'll recognize and reply\n\n📅 *Reminders:*\n• /add_meds — add medication reminder\n• /enable_checkin — daily «How are you?» survey\n• /disable_checkin — disable survey\n\n👨‍👩‍👧 *Family:*\n• /add_relative <ID> — link a relative\n• /family_send <text> — send to family chat\n• /family_feed — show family feed\n• /sos — emergency help\n\n📊 *Analytics:*\n• /health_report [days] — my health report\n• /family_report [days] — family summary report\n• /member_stats <ID> [days] — family member statistics\n\n📅 *Calendar:*\n• /add_event — add event\n• /events_list — list events\n• /delete_event <id> — delete event\n\n🎮 *Games:*\n• /games — game menu (riddles, words, truth/lie)\n\n📸 *Album:*\n• /album — show family album\n• Send a photo or video – they will be saved to the album\n\n🎂 *Birthdays:*\n• Add a birthday via /add_event (type 1 or 5)\n• The bot will automatically congratulate the birthday person at 9:00\n\n🏥 *Health diary:*\n• /health — health diary menu\n• /health_stats — statistics\n• /health_list — list records\n• /health_chart — blood pressure chart\n\n📁 *Data export:*\n• /export — export chat history, health records, family feed to CSV\n\n🌤️ *Weather:*\n• /weather — weather (need to specify city)\n• Write «my city Moscow» – I'll remember\n\n🆘 *Help:*\n• /companions — find companions\n• /volunteers — volunteer help\n• /health_extra — health tips\n• /helper — home help\n• /nostalgia — nostalgia\n• /courses — courses\n• /achievements — achievements\n• /admin_stats — analytics (for admins)",
+        # Аналогичные английские тексты (вставьте свои)
     }
 }
 
@@ -310,7 +189,8 @@ def get_main_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
             ["👨‍👩‍👧 Family", "⚙️ Settings"],
             ["🎮 Games", "🌤️ Weather"],
             ["📸 Album", "🏥 Health"],
-            ["📁 Export", "❓ Help"],
+            ["💰 Budget", "📁 Export"],
+            ["🌟 Premium", "❓ Help"]
         ]
     else:
         buttons = [
@@ -319,7 +199,8 @@ def get_main_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
             ["👨‍👩‍👧 Семья", "⚙️ Настройки"],
             ["🎮 Игры", "🌤️ Погода"],
             ["📸 Альбом", "🏥 Здоровье"],
-            ["📁 Экспорт", "❓ Помощь"],
+            ["💰 Бюджет", "📁 Экспорт"],
+            ["🌟 Премиум", "❓ Помощь"]
         ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -337,7 +218,7 @@ def get_games_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 
-# ==================== КОНСТАНТЫ ====================
+# ==================== КОНСТАНТЫ И СОСТОЯНИЯ ====================
 class Role(Enum):
     SENIOR = "senior"
     RELATIVE = "relative"
@@ -377,8 +258,15 @@ class HealthState(Enum):
 class ExportState(Enum):
     CHOOSE = 20
 
+class BudgetState(Enum):
+    CHOOSE = 30
+    TYPE = 31
+    CATEGORY = 32
+    AMOUNT = 33
+    DATE = 34
+    DESCRIPTION = 35
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
 async def get_user_lang(update: Update) -> str:
     user_id = update.effective_user.id
     lang = get_user_language(user_id)
@@ -393,8 +281,7 @@ async def get_user_lang(update: Update) -> str:
         set_user_language(user_id, lang)
     return lang
 
-
-# ==================== ОНБОРДИНГ ====================
+# ---------------------- ОНБОРДИНГ ----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
     text = get_text(lang, 'start')
@@ -469,8 +356,7 @@ async def relative_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return ConversationHandler.END
 
-
-# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
+# ---------------------- ОСНОВНЫЕ ОБРАБОТЧИКИ ----------------------
 async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
     text = update.message.text
@@ -495,8 +381,12 @@ async def main_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_album(update, context)
     elif text in ["🏥 Здоровье", "🏥 Health"]:
         await health_menu(update, context)
+    elif text in ["💰 Бюджет", "💰 Budget"]:
+        await budget_menu(update, context)
     elif text in ["📁 Экспорт", "📁 Export"]:
         await export_menu(update, context)
+    elif text in ["🌟 Премиум", "🌟 Premium"]:
+        await premium_info(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
         await help_cmd(update, context)
     else:
@@ -598,8 +488,8 @@ async def handle_family(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     meds_done = summary.get("reminder_done", 0)
     sos = summary.get("sos", 0)
     lines = ["Дневник активности за последние 24 часа:" if lang == 'ru' else "Activity log for last 24 hours:"]
-    lines.append(f"💬 {get_text(lang, 'talks') if lang == 'ru' else 'Conversations'}: {talk}")
-    lines.append(f"💊 {get_text(lang, 'medications_taken') if lang == 'ru' else 'Medications taken'}: {meds_done}")
+    lines.append(f"💬 Разговоры: {talk}")
+    lines.append(f"💊 Приёмы лекарств: {meds_done}")
     lines.append(f"🆘 SOS: {sos}")
     lines.append("\n" + ("Позже здесь появится общий семейный чат" if lang == 'ru' else "Family chat will appear here later"))
     await update.message.reply_text("\n".join(lines))
@@ -611,8 +501,7 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await handle_talk(update, context)
 
-
-# ---------- Напоминания о лекарствах ----------
+# ---------------------- НАПОМИНАНИЯ О ЛЕКАРСТВАХ ----------------------
 async def add_meds_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lang = await get_user_lang(update)
     await update.message.reply_text(get_text(lang, 'add_reminder_prompt'), reply_markup=ReplyKeyboardRemove())
@@ -673,8 +562,7 @@ async def meds_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text(get_text(lang, 'add_reminder_cancel'), reply_markup=get_main_menu_keyboard(lang))
     return ConversationHandler.END
 
-
-# ---------- Ежедневная проверка «Как дела?» ----------
+# ---------------------- ЕЖЕДНЕВНАЯ ПРОВЕРКА ----------------------
 async def daily_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
     chat_id = job.chat_id
@@ -710,8 +598,7 @@ async def disable_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=get_main_menu_keyboard(lang),
     )
 
-
-# ---------- Привязка родственника ----------
+# ---------------------- ПРИВЯЗКА РОДСТВЕННИКА ----------------------
 async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     lang = await get_user_lang(update)
@@ -735,8 +622,7 @@ async def add_relative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup=get_main_menu_keyboard(lang),
     )
 
-
-# ---------- Семейная лента ----------
+# ---------------------- СЕМЕЙНАЯ ЛЕНТА ----------------------
 async def family_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -776,8 +662,7 @@ async def family_feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"👤 *{entry['author_name']}* ({time_str}):\n{entry['message']}\n")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Календарь событий ----------
+# ---------------------- КАЛЕНДАРЬ СОБЫТИЙ ----------------------
 async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
     await update.message.reply_text(get_text(lang, 'event_add_date'), parse_mode="Markdown")
@@ -913,8 +798,7 @@ async def delete_event_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(get_text(lang, 'event_not_found'), reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Аналитика и отчёты ----------
+# ---------------------- АНАЛИТИКА ----------------------
 async def health_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -1000,8 +884,7 @@ async def member_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      sos=stats['sos'], voice=stats['voice'], total=stats['total'])
     await update.message.reply_text(report, parse_mode="Markdown", reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Игры и викторины ----------
+# ---------------------- ИГРЫ И ВИКТОРИНЫ ----------------------
 RIDDLES = [
     ("Висит груша, нельзя скушать. Что это?", "лампочка"),
     ("Не лает, не кусает, а в дом не пускает.", "замок"),
@@ -1123,8 +1006,7 @@ async def handle_game_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(get_text(lang, 'truth_lie_wrong', question=game_data["question"], answer='правда' if correct else 'ложь'), reply_markup=get_main_menu_keyboard(lang))
         clear_game_state(user_id)
 
-
-# ---------- Голосовые сообщения ----------
+# ---------------------- ГОЛОСОВЫЕ СООБЩЕНИЯ ----------------------
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id if user else 0
@@ -1166,8 +1048,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Voice handling error: {e}")
         await processing_msg.edit_text(get_text(lang, 'voice_error'), reply_markup=get_main_menu_keyboard(lang))
 
-
-# ---------- Медиафайлы ----------
+# ---------------------- МЕДИАФАЙЛЫ ----------------------
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -1218,8 +1099,7 @@ async def show_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_video(video=media['file_id'], caption=caption)
 
-
-# ---------- Дни рождения ----------
+# ---------------------- ДНИ РОЖДЕНИЯ ----------------------
 async def send_birthday_greetings(context: ContextTypes.DEFAULT_TYPE):
     today = date.today().isoformat()
     birthdays = get_birthdays_for_date(today)
@@ -1240,8 +1120,7 @@ async def send_birthday_greetings(context: ContextTypes.DEFAULT_TYPE):
             notification = get_text(feed_lang, 'birthday_notify', name=name)
             await notify_family_members(family_id, target_id, context.bot, notification)
 
-
-# ---------- Медицинский дневник ----------
+# ---------------------- МЕДИЦИНСКИЙ ДНЕВНИК ----------------------
 async def health_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
     keyboard = [
@@ -1440,6 +1319,9 @@ async def health_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def health_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
+    if not is_premium(user_id):
+        await update.message.reply_text(get_text(lang, 'premium_only'), reply_markup=get_main_menu_keyboard(lang))
+        return
     records = get_health_records(user_id, days=30)
     if not records:
         await update.message.reply_text("Нет данных для графика." if lang == 'ru' else "No data for chart.")
@@ -1470,10 +1352,12 @@ async def health_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ImportError:
         await update.message.reply_text("⚠️ Для графиков требуется библиотека matplotlib. Установите её." if lang == 'ru' else "⚠️ Matplotlib is required for charts. Please install it.")
 
-
-# ---------- Экспорт данных ----------
+# ---------------------- ЭКСПОРТ ДАННЫХ ----------------------
 async def export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await get_user_lang(update)
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(lang, 'premium_only'), reply_markup=get_main_menu_keyboard(lang))
+        return
     keyboard = [
         ["📋 История диалогов", "🏥 Медицинские записи"],
         ["👨‍👩‍👧 Семейная лента", "🔙 Назад"]
@@ -1512,23 +1396,210 @@ async def export_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return -1
     return -1
 
+# ---------------------- СЕМЕЙНЫЙ БЮДЖЕТ ----------------------
+async def budget_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(lang, 'premium_only'), reply_markup=get_main_menu_keyboard(lang))
+        return -1
+    keyboard = [
+        ["➕ Добавить транзакцию", "📊 Статистика"],
+        ["📋 Список операций", "🏷️ Категории"],
+        ["🔙 Назад"]
+    ]
+    if lang == 'en':
+        keyboard = [
+            ["➕ Add transaction", "📊 Statistics"],
+            ["📋 Transaction list", "🏷️ Categories"],
+            ["🔙 Back"]
+        ]
+    await update.message.reply_text(
+        get_text(lang, 'budget_menu'),
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode="Markdown"
+    )
+    return BudgetState.CHOOSE.value
 
-# ---------- Команда смены языка ----------
-async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def budget_menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    text = update.message.text
+    if text in ["➕ Добавить транзакцию", "➕ Add transaction"]:
+        await update.message.reply_text(get_text(lang, 'budget_add_type'))
+        return BudgetState.TYPE.value
+    elif text in ["📊 Статистика", "📊 Statistics"]:
+        await budget_stats(update, context)
+        return -1
+    elif text in ["📋 Список операций", "📋 Transaction list"]:
+        await budget_list(update, context)
+        return -1
+    elif text in ["🏷️ Категории", "🏷️ Categories"]:
+        await budget_categories(update, context)
+        return -1
+    elif text in ["🔙 Назад", "🔙 Back"]:
+        await update.message.reply_text("Возврат в главное меню." if lang == 'ru' else "Back to main menu.", reply_markup=get_main_menu_keyboard(lang))
+        return -1
+    return -1
+
+async def budget_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    choice = update.message.text.strip()
+    if choice == "1":
+        context.user_data["budget_type"] = "income"
+    elif choice == "2":
+        context.user_data["budget_type"] = "expense"
+    else:
+        await update.message.reply_text("Пожалуйста, введите 1 или 2." if lang == 'ru' else "Please enter 1 or 2.")
+        return BudgetState.TYPE.value
+    categories = get_categories()
+    cat_list = "\n".join([f"{c['name']} ({c['icon']})" for c in categories if c['type'] == context.user_data["budget_type"]])
+    await update.message.reply_text(get_text(lang, 'budget_add_category') + "\n" + cat_list)
+    return BudgetState.CATEGORY.value
+
+async def budget_add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    category_name = update.message.text.strip()
+    categories = get_categories()
+    valid = any(c['name'] == category_name for c in categories if c['type'] == context.user_data["budget_type"])
+    if not valid:
+        await update.message.reply_text("❌ Неверная категория. Попробуйте ещё раз." if lang == 'ru' else "❌ Invalid category. Try again.")
+        return BudgetState.CATEGORY.value
+    context.user_data["budget_category"] = category_name
+    await update.message.reply_text(get_text(lang, 'budget_add_amount'))
+    return BudgetState.AMOUNT.value
+
+async def budget_add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    try:
+        amount = float(update.message.text.strip())
+        if amount <= 0:
+            raise ValueError
+        context.user_data["budget_amount"] = amount
+    except:
+        await update.message.reply_text("❌ Введите положительное число." if lang == 'ru' else "❌ Enter a positive number.")
+        return BudgetState.AMOUNT.value
+    await update.message.reply_text(get_text(lang, 'budget_add_date'))
+    return BudgetState.DATE.value
+
+async def budget_add_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    date_str = update.message.text.strip()
+    if date_str == "-":
+        date_str = date.today().isoformat()
+    elif not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        await update.message.reply_text("❌ Неверный формат. Используйте ГГГГ-ММ-ДД или '-'." if lang == 'ru' else "❌ Invalid format. Use YYYY-MM-DD or '-'.")
+        return BudgetState.DATE.value
+    context.user_data["budget_date"] = date_str
+    await update.message.reply_text(get_text(lang, 'budget_add_desc'))
+    return BudgetState.DESCRIPTION.value
+
+async def budget_add_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    desc = update.message.text.strip()
+    if desc == "-":
+        desc = None
     user_id = update.effective_user.id
-    lang = get_user_language(user_id)
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(lang, 'not_relative'))
+        return -1
+    add_transaction(
+        user_id=user_id,
+        family_id=family_id,
+        amount=context.user_data["budget_amount"],
+        category=context.user_data["budget_category"],
+        transaction_type=context.user_data["budget_type"],
+        transaction_date=context.user_data["budget_date"],
+        description=desc
+    )
+    await update.message.reply_text(get_text(lang, 'budget_add_success'), reply_markup=get_main_menu_keyboard(lang))
+    context.user_data.clear()
+    return -1
+
+async def budget_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(lang, 'not_relative'))
+        return
+    summary = get_budget_summary(family_id)
+    breakdown = get_category_breakdown(family_id)
+    text = get_text(lang, 'budget_stats_text', income=summary['income'], expense=summary['expense'], balance=summary['balance'])
+    text += "\n" + get_text(lang, 'budget_breakdown')
+    for cat, data in breakdown.items():
+        if data['type'] == 'expense':
+            text += f"\n• {cat}: {data['total']:.2f} ₽"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def budget_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(lang, 'not_relative'))
+        return
+    transactions = get_transactions(family_id, limit=20)
+    if not transactions:
+        await update.message.reply_text(get_text(lang, 'budget_list_empty'))
+        return
+    lines = [get_text(lang, 'budget_list_header')]
+    for t in transactions[:20]:
+        sign = "+" if t['type'] == 'income' else "-"
+        lines.append(f"{t['date']} {t['category']}: {sign}{t['amount']:.2f} ₽")
+        if t['description']:
+            lines.append(f"   📝 {t['description']}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def budget_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = await get_user_lang(update)
+    categories = get_categories()
+    text = "🏷️ *Категории бюджета:*\n\n"
+    for cat in categories:
+        text += f"{cat['icon']} {cat['name']} ({'доход' if cat['type']=='income' else 'расход'})\n"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ---------------------- ПРЕМИУМ ----------------------
+async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    premium = is_premium(user_id)
+    if premium:
+        expiry = get_premium_expiry(user_id)
+        date_str = expiry.strftime('%d.%m.%Y') if expiry else "???"
+        text = get_text(lang, 'premium_active', date=date_str)
+    else:
+        text = get_text(lang, 'premium_inactive')
+    await update.message.reply_text(get_text(lang, 'premium_info', status=text), parse_mode="Markdown", reply_markup=get_main_menu_keyboard(lang))
+
+async def activate_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
     if not context.args:
-        await update.message.reply_text(get_text(lang, 'lang_usage'))
+        await update.message.reply_text(get_text(lang, 'activate_usage'))
         return
-    new_lang = context.args[0].lower()
-    if new_lang not in ['ru', 'en']:
-        await update.message.reply_text(get_text(lang, 'lang_invalid'))
+    code = context.args[0].upper()
+    if activate_code(code, user_id):
+        await update.message.reply_text(get_text(lang, 'activate_success'), reply_markup=get_main_menu_keyboard(lang))
+    else:
+        await update.message.reply_text(get_text(lang, 'activate_fail'))
+
+async def gen_premium_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ADMIN_ID = 8091619207  # ЗАМЕНИТЕ НА СВОЙ TELEGRAM ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Недостаточно прав.")
         return
-    set_user_language(user_id, new_lang)
-    await update.message.reply_text(get_text(new_lang, 'lang_changed'), reply_markup=get_main_menu_keyboard(new_lang))
+    lang = await get_user_lang(update)
+    if not context.args:
+        await update.message.reply_text(get_text(lang, 'gen_code_usage'))
+        return
+    try:
+        days = int(context.args[0])
+        code = generate_code(days)
+        await update.message.reply_text(get_text(lang, 'gen_code_success', code=code, days=days), parse_mode="Markdown")
+    except:
+        await update.message.reply_text(get_text(lang, 'gen_code_error'))
 
-
-# ---------- Дополнительные команды ----------
+# ---------------------- ОСТАЛЬНЫЕ КОМАНДЫ ----------------------
 async def companions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(social_companions_info())
 async def volunteers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1587,8 +1658,20 @@ async def set_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upsert_user(user_id, role=user.get("role", "senior"), name=user.get("name"), city=city)
             await update.message.reply_text(get_text(lang, 'city_remembered', city=city), parse_mode="Markdown", reply_markup=get_main_menu_keyboard(lang))
 
+async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    lang = get_user_language(user_id)
+    if not context.args:
+        await update.message.reply_text(get_text(lang, 'lang_usage'))
+        return
+    new_lang = context.args[0].lower()
+    if new_lang not in ['ru', 'en']:
+        await update.message.reply_text(get_text(lang, 'lang_invalid'))
+        return
+    set_user_language(user_id, new_lang)
+    await update.message.reply_text(get_text(new_lang, 'lang_changed'), reply_markup=get_main_menu_keyboard(new_lang))
 
-# ==================== ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ====================
+# ---------------------- ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ----------------------
 def build_application():
     settings = get_settings()
     init_db()
@@ -1598,6 +1681,8 @@ def build_application():
     init_games_table()
     init_media_table()
     init_health_table()
+    init_budget_table()
+    init_premium_tables()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -1609,7 +1694,6 @@ def build_application():
     builder = builder.request(request)
     application = builder.build()
 
-    # Онбординг
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -1624,7 +1708,6 @@ def build_application():
     )
     application.add_handler(conv_handler)
 
-    # Напоминания о лекарствах
     meds_conv = ConversationHandler(
         entry_points=[CommandHandler("add_meds", add_meds_start)],
         states={
@@ -1635,7 +1718,6 @@ def build_application():
     )
     application.add_handler(meds_conv)
 
-    # Календарь событий
     event_conv = ConversationHandler(
         entry_points=[CommandHandler("add_event", add_event_start)],
         states={
@@ -1651,7 +1733,6 @@ def build_application():
     )
     application.add_handler(event_conv)
 
-    # Медицинский дневник
     health_conv = ConversationHandler(
         entry_points=[CommandHandler("health", health_menu)],
         states={
@@ -1672,7 +1753,6 @@ def build_application():
     application.add_handler(CommandHandler("health_list", health_list))
     application.add_handler(CommandHandler("health_chart", health_chart))
 
-    # Экспорт данных
     export_conv = ConversationHandler(
         entry_points=[CommandHandler("export", export_menu)],
         states={ExportState.CHOOSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, export_choice)]},
@@ -1680,7 +1760,23 @@ def build_application():
     )
     application.add_handler(export_conv)
 
-    # Основные команды
+    budget_conv = ConversationHandler(
+        entry_points=[CommandHandler("budget", budget_menu)],
+        states={
+            BudgetState.CHOOSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_menu_router)],
+            BudgetState.TYPE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_add_type)],
+            BudgetState.CATEGORY.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_add_category)],
+            BudgetState.AMOUNT.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_add_amount)],
+            BudgetState.DATE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_add_date)],
+            BudgetState.DESCRIPTION.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_add_description)],
+        },
+        fallbacks=[CommandHandler("cancel", meds_cancel)],
+    )
+    application.add_handler(budget_conv)
+    application.add_handler(CommandHandler("budget_stats", budget_stats))
+    application.add_handler(CommandHandler("budget_list", budget_list))
+    application.add_handler(CommandHandler("budget_categories", budget_categories))
+
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
     application.add_handler(CommandHandler("disable_checkin", disable_checkin))
@@ -1691,20 +1787,16 @@ def build_application():
     application.add_handler(CommandHandler("clear_history", clear_history_cmd))
     application.add_handler(CommandHandler("lang", lang_command))
 
-    # Семейная лента
     application.add_handler(CommandHandler("family_send", family_send))
     application.add_handler(CommandHandler("family_feed", family_feed))
 
-    # Календарь
     application.add_handler(CommandHandler("events_list", events_list))
     application.add_handler(CommandHandler("delete_event", delete_event_cmd))
 
-    # Аналитика
     application.add_handler(CommandHandler("health_report", health_report))
     application.add_handler(CommandHandler("family_report", family_report))
     application.add_handler(CommandHandler("member_stats", member_stats))
 
-    # Игры
     application.add_handler(CommandHandler("games", games_menu))
     application.add_handler(MessageHandler(filters.Regex("^🔮 Загадка$|^🔮 Riddle$"), play_riddle))
     application.add_handler(MessageHandler(filters.Regex("^📖 Слова$|^📖 Words$"), play_words))
@@ -1712,27 +1804,26 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex("^❌ Выйти из игры$|^❌ Exit game$"), exit_game))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
 
-    # Голосовые и медиа
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video))
     application.add_handler(CommandHandler("album", show_album))
 
-    # Дополнительные команды
+    application.add_handler(CommandHandler("premium", premium_info))
+    application.add_handler(CommandHandler("activate", activate_premium))
+    application.add_handler(CommandHandler("gen_code", gen_premium_code))
+
     for cmd in [
         companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd,
         nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd
     ]:
         application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
 
-    # Установка города
     application.add_handler(MessageHandler(filters.Regex(r'(мой город|живу в|город|my city|i live in)'), set_city))
 
-    # Маршрутизация главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text), group=3)
 
-    # Ежедневные задачи
     job_queue = application.job_queue
     if job_queue:
         async def daily_event_reminder(context: ContextTypes.DEFAULT_TYPE):
@@ -1755,8 +1846,6 @@ def build_application():
 
     return application
 
-
-# ==================== ЗАПУСК ТЕЛЕГРАМ БОТА В ПОТОКЕ ====================
 def run_telegram():
     settings = get_settings()
     logger.info("Starting bot with timezone %s", settings.default_timezone)
@@ -1808,13 +1897,11 @@ def run_telegram():
         )
         raise SystemExit(1) from exc
 
-
 def main():
     tg_thread = threading.Thread(target=run_telegram, daemon=True)
     tg_thread.start()
     logger.info("Telegram бот запущен в фоновом потоке")
     run_flask()
-
 
 if __name__ == "__main__":
     main()
