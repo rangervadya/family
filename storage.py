@@ -44,6 +44,12 @@ def init_db():
             PRIMARY KEY (senior_id, relative_id)
         )
     """)
+    conn.commit()
+    conn.close()
+
+def init_chat_history_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +59,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)")
+    conn.commit()
+    conn.close()
+
+def init_family_feed_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS family_feed (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,6 +78,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_family_id ON family_feed(family_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_created_at ON family_feed(created_at)")
+    conn.commit()
+    conn.close()
+
+def init_calendar_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +100,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
+    conn.commit()
+    conn.close()
+
+def init_games_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games_state (
             user_id INTEGER PRIMARY KEY,
@@ -86,6 +116,12 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.commit()
+    conn.close()
+
+def init_media_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS media_albums (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +134,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_family_id ON media_albums(family_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_created_at ON media_albums(created_at)")
+    conn.commit()
+    conn.close()
+
+def init_health_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS health_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +157,13 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date)")
+    conn.commit()
+    conn.close()
+
+def init_budget_table():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS budget_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +185,25 @@ def init_db():
             icon TEXT
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_family_date ON budget_transactions(family_id, transaction_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_user ON budget_transactions(user_id)")
+    conn.commit()
+    cursor.execute("SELECT COUNT(*) FROM budget_categories")
+    if cursor.fetchone()[0] == 0:
+        default_categories = [
+            ("Зарплата", "income", "💰"), ("Пенсия", "income", "🏦"), ("Подарок", "income", "🎁"),
+            ("Продукты", "expense", "🍎"), ("Лекарства", "expense", "💊"), ("Коммунальные услуги", "expense", "🏠"),
+            ("Транспорт", "expense", "🚗"), ("Развлечения", "expense", "🎬"), ("Одежда", "expense", "👕"),
+            ("Здоровье", "expense", "🏥"), ("Другое", "expense", "📦")
+        ]
+        for name, typ, icon in default_categories:
+            cursor.execute("INSERT INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", (name, typ, icon))
+    conn.commit()
+    conn.close()
+
+def init_premium_tables():
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS premium_users (
             user_id INTEGER PRIMARY KEY,
@@ -150,18 +220,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    conn.commit()
-    # Добавляем категории бюджета, если пусто
-    cursor.execute("SELECT COUNT(*) FROM budget_categories")
-    if cursor.fetchone()[0] == 0:
-        default_categories = [
-            ("Зарплата", "income", "💰"), ("Пенсия", "income", "🏦"), ("Подарок", "income", "🎁"),
-            ("Продукты", "expense", "🍎"), ("Лекарства", "expense", "💊"), ("Коммунальные услуги", "expense", "🏠"),
-            ("Транспорт", "expense", "🚗"), ("Развлечения", "expense", "🎬"), ("Одежда", "expense", "👕"),
-            ("Здоровье", "expense", "🏥"), ("Другое", "expense", "📦")
-        ]
-        for name, typ, icon in default_categories:
-            cursor.execute("INSERT INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", (name, typ, icon))
     conn.commit()
     conn.close()
 
@@ -326,7 +384,7 @@ def get_family_feed(family_id: int, limit: int = 20) -> list:
         })
     return feed
 
-# ---------- Календарь ----------
+# ---------- Календарь событий ----------
 def add_event(user_id: int, event_date: str, title: str, description: str = None,
               event_time: str = None, event_type: str = "other", remind_before_days: int = 1,
               target_user_id: int = None) -> int:
