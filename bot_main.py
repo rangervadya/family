@@ -21,6 +21,7 @@ from telegram.ext import (
     ContextTypes, JobQueue, filters, CallbackQueryHandler, PreCheckoutQueryHandler
 )
 from telegram.request import HTTPXRequest
+from telegram.error import Conflict
 
 from bot_config import get_settings
 from ai_stubs import generate_companion_reply
@@ -628,7 +629,7 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
-        # ВАЖНО: параметр provider_token НЕ ПЕРЕДАЁМ (для Stars он не нужен)
+        # ВАЖНО: НЕ передаём provider_token! Для Stars он не нужен.
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
@@ -1581,13 +1582,16 @@ def run_telegram():
     asyncio.set_event_loop(loop)
     app = build_application()
     async def start_bot():
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
         try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            pass
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling(drop_pending_updates=True)
+            try:
+                await asyncio.Event().wait()
+            except KeyboardInterrupt:
+                pass
+        except Conflict:
+            logger.error("Конфликт: бот уже запущен. Остановите другой экземпляр.")
         finally:
             await app.updater.stop()
             await app.shutdown()
