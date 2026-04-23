@@ -14,10 +14,10 @@ from typing import Final, Dict
 from datetime import time, date, timedelta
 from flask import Flask
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler,
-    ContextTypes, JobQueue, filters
+    ContextTypes, JobQueue, filters, CallbackQueryHandler, PreCheckoutQueryHandler
 )
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError, TimedOut, BadRequest
@@ -123,7 +123,8 @@ TEXTS = {
         'activate_fail': "❌ Неверный код.",
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
-        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.",
+        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.\n\nКупить за Stars: /buy_premium",
+        'buy_premium_prompt': "🌟 Купить премиум-доступ за Telegram Stars.\nЦена: 10 Stars за 30 дней.",
     },
     'en': {}
 }
@@ -248,7 +249,7 @@ async def main_menu_router(update, context):
     # Кнопка "Поговорить" включает режим диалога
     if text in ["💬 Поговорить", "💬 Talk"]:
         context.user_data["in_conversation"] = True
-        await handle_talk(update, context)   # обрабатываем это же сообщение как начало разговора
+        await handle_talk(update, context)
         return
 
     # Любая другая кнопка выключает режим диалога
@@ -263,7 +264,7 @@ async def main_menu_router(update, context):
     elif text in ["🌟 Премиум", "🌟 Premium"]:
         await premium_info(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
-        await help_cmd(update, context)   # ИСПРАВЛЕНО: кнопка помощи работает
+        await help_cmd(update, context)
     elif premium and text in ["👥 События", "👥 Events"]:
         await handle_events(update, context)
     elif premium and text in ["🆘 ПОМОЩЬ", "🆘 HELP"]:
@@ -286,12 +287,10 @@ async def main_menu_router(update, context):
 async def handle_talk(update, context):
     """Обработчик диалога. Срабатывает только если in_conversation == True."""
     if not context.user_data.get("in_conversation", False):
-        # Не в режиме диалога – просто игнорируем сообщение, ничего не отвечаем
         return
 
     user = update.effective_user
     user_id = user.id
-    lang = await get_user_lang(update)
     name = context.user_data.get("name") or user.first_name
     last_text = update.message.text.strip()
     if not last_text:
@@ -318,7 +317,6 @@ async def handle_reminders(update, context):
 
 async def weather_command(update, context):
     user = update.effective_user
-    lang = await get_user_lang(update)
     name = context.user_data.get("name") or user.first_name
     city = context.user_data.get("city")
     if not city:
@@ -558,7 +556,72 @@ async def premium_info(update, context):
         status = get_text(lang, 'premium_active', date=expiry.strftime('%d.%m.%Y'))
     else:
         status = get_text(lang, 'premium_inactive')
-    await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    # Добавляем inline-кнопку для покупки, если нет премиума
+    if not premium:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за Stars", callback_data="buy_premium")]])
+        await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=keyboard)
+    else:
+        await update.message.reply_text(get_text(lang, 'premium_info', status=status))
+
+async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    lang = await get_user_lang(update)
+    await send_invoice(update, context)
+
+async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет счёт на оплату в Telegram Stars."""
+    chat_id = update.effective_chat.id
+    price_stars = 10  # Цена в Stars за 30 дней
+    payload = "premium_30days"
+    title = "Премиум-доступ на 30 дней"
+    description = "Получите все премиум-функции бота на 30 дней."
+
+    await context.bot.send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=payload,
+        provider_token="",  # Для Stars обязательно пустая строка
+        currency="XTR",      # Валюта Telegram Stars
+        prices=[LabeledPrice(label="XTR", amount=price_stars)],
+        start_parameter="premium_payment"
+    )
+
+async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обязательная проверка перед оплатой."""
+    query = update.pre_checkout_query
+    await query.answer(ok=True)  # Всегда разрешаем
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вызывается после успешной оплаты Stars."""
+    user_id = update.effective_user.id
+    payment = update.effective_message.successful_payment
+    total_amount = payment.total_amount  # количество Stars
+    payload = payment.invoice_payload     # "premium_30days"
+    
+    # Активируем премиум на 30 дней
+    add_premium_user(user_id, days=30)   # предполагаем, что такая функция есть в storage.py
+    # Альтернативно, если функция называется activate_premium, используйте её.
+    
+    lang = await get_user_lang(update)
+    await update.effective_message.reply_text(
+        f"✅ Оплата {total_amount} Stars получена! Премиум-доступ активирован на 30 дней.\nСпасибо за поддержку! 🎉"
+    )
+    # Отправим новую клавиатуру с премиум-функциями
+    premium = is_premium(user_id)
+    markup = get_premium_keyboard(lang) if premium else get_free_keyboard(lang)
+    await update.effective_message.reply_text("Ваше меню обновлено:", reply_markup=markup)
+    
+    # Уведомление администратору
+    ADMIN_CHAT_ID = 8091619207  # Замените на ваш Telegram ID
+    try:
+        await context.bot.send_message(
+            ADMIN_CHAT_ID,
+            f"💰 Пользователь {user_id} оплатил премиум {total_amount} Stars."
+        )
+    except:
+        pass
 
 async def activate_premium(update, context):
     user_id = update.effective_user.id
@@ -1186,33 +1249,20 @@ async def notify_family_members(family_id, exclude_user_id, bot, notification):
 
 # ---------- ОСТАЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ ----------
 async def help_cmd(update, context):
-    """Команда /help и кнопка «Помощь»."""
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
-    # Используем HTML, чтобы избежать проблем с Markdown
+    text = (
+        "<b>🤖 Бот-компаньон «Семья»</b>\n"
+        "/start – регистрация\n"
+        "/menu – главное меню\n"
+        "/add_meds – напоминание о лекарствах\n"
+        "/weather – погода\n"
+        "/games – игры\n"
+        "/premium – информация о премиум\n"
+        "/activate &lt;код&gt; – активировать премиум\n"
+    )
     if premium:
-        text = (
-            "<b>🤖 Бот-компаньон «Семья»</b>\n"
-            "/start – регистрация\n"
-            "/menu – главное меню\n"
-            "/add_meds – напоминание о лекарствах\n"
-            "/weather – погода\n"
-            "/games – игры\n"
-            "/premium – информация о премиум\n"
-            "/activate &lt;код&gt; – активировать премиум\n"
-            "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
-        )
-    else:
-        text = (
-            "<b>🤖 Бот-компаньон «Семья»</b>\n"
-            "/start – регистрация\n"
-            "/menu – главное меню\n"
-            "/add_meds – напоминание о лекарствах\n"
-            "/weather – погода\n"
-            "/games – игры\n"
-            "/premium – информация о премиум\n"
-            "/activate &lt;код&gt; – активировать премиум"
-        )
+        text += "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
     await update.message.reply_text(text, parse_mode="HTML")
     context.user_data["in_conversation"] = False
 
@@ -1419,6 +1469,11 @@ def build_application():
     application.add_handler(CommandHandler("activate", activate_premium))
     application.add_handler(CommandHandler("gen_code", gen_premium_code))
 
+    # Платёжные обработчики (Stars)
+    application.add_handler(CallbackQueryHandler(buy_premium_callback, pattern="buy_premium"))
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+
     # Премиум-команды
     application.add_handler(CommandHandler("family_send", family_send_cmd))
     application.add_handler(CommandHandler("family_feed", family_feed_cmd))
@@ -1444,7 +1499,6 @@ def build_application():
 
     # Роутер главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
-    # Fallback для обработки текста (когда не сработал роутер, например, в диалоге)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_talk), group=3)
 
     # JobQueue
