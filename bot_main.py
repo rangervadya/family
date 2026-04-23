@@ -161,8 +161,7 @@ TEXTS = {
         'activate_fail': "❌ Неверный код.",
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
-        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 1 Star: /buy_premium",
-        'buy_premium_prompt': "🌟 Купить премиум-доступ за Telegram Stars.\nЦена: 1 Star за 30 дней.",
+        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 1 Star: нажмите кнопку ниже",
         'invalid_family_code': "❌ Неверный код привязки.",
         'family_code_created': "✅ Код для привязки родственника: `{code}`\nПередайте его родственнику. Код действителен 7 дней.",
         'only_senior_can_create_code': "Эта команда доступна только пожилым пользователям.",
@@ -598,7 +597,7 @@ async def handle_voice(update, context):
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка обработки голоса.")
 
-# ---------- ПРЕМИУМ-ОБРАБОТЧИКИ И ОПЛАТА STARS ----------
+# ---------- ПРЕМИУМ-ОБРАБОТЧИКИ И ОПЛАТА (ИСПРАВЛЕНО) ----------
 async def premium_info(update, context):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -609,7 +608,7 @@ async def premium_info(update, context):
         await update.message.reply_text(get_text(lang, 'premium_info', status=status))
     else:
         status = get_text(lang, 'premium_inactive')
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за Stars", callback_data="buy_premium")]])
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за 1 Star", callback_data="buy_premium")]])
         await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=keyboard)
 
 async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -618,7 +617,12 @@ async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await send_invoice(update, context)
 
 async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+    # Определяем chat_id в зависимости от типа update
+    if update.callback_query:
+        chat_id = update.callback_query.message.chat_id
+    else:
+        chat_id = update.effective_chat.id
+
     price_stars = 1
     payload = "premium_30days"
     title = "Премиум-доступ на 30 дней"
@@ -630,11 +634,10 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title=title,
             description=description,
             payload=payload,
-            provider_token="",        # для Stars обязательно пусто
+            provider_token="",        # для Stars обязательно пустая строка
             currency="XTR",           # валюта Telegram Stars
             prices=[LabeledPrice(label="XTR", amount=price_stars)],
             start_parameter="premium_payment",
-            # опционально, но улучшает интерфейс:
             need_name=False,
             need_phone_number=False,
             need_email=False,
@@ -643,7 +646,7 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке инвойса: {e}")
-        await update.effective_message.reply_text("❌ Ошибка при создании счёта. Попробуйте позже или свяжитесь с администратором.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при создании счёта. Попробуйте позже или свяжитесь с администратором.")
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
@@ -656,19 +659,17 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     payload = payment.invoice_payload
 
     if payload == "premium_30days":
-        # Активируем премиум на 30 дней
         add_premium_user(user_id, days=30)
 
     lang = await get_user_lang(update)
     await update.effective_message.reply_text(
         f"✅ Оплата {total_amount} Stars получена! Премиум-доступ активирован на 30 дней.\nСпасибо за поддержку! 🎉"
     )
-    # Обновляем клавиатуру до премиум
     premium = is_premium(user_id)
     markup = get_premium_keyboard(lang) if premium else get_free_keyboard(lang)
     await update.effective_message.reply_text("Ваше меню обновлено:", reply_markup=markup)
 
-    ADMIN_CHAT_ID = 8091619207  # замените на свой ID
+    ADMIN_CHAT_ID = 8091619207
     try:
         await context.bot.send_message(ADMIN_CHAT_ID, f"💰 Пользователь {user_id} оплатил премиум {total_amount} Stars.")
     except:
