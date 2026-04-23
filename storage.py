@@ -4,9 +4,12 @@ import io
 from datetime import datetime, timedelta
 import secrets
 
+# ---------- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (с миграцией) ----------
 def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
+    
+    # Таблица users
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -17,11 +20,13 @@ def init_db():
             role TEXT DEFAULT 'senior'
         )
     """)
+    # Добавляем колонку language, если её нет
     cursor.execute("PRAGMA table_info(users)")
-    cols = [c[1] for c in cursor.fetchall()]
-    if 'language' not in cols:
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'language' not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
     
+    # Остальные таблицы (без изменений)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +63,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS family_feed (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +77,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_family_id ON family_feed(family_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_created_at ON family_feed(created_at)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,11 +93,12 @@ def init_db():
         )
     """)
     cursor.execute("PRAGMA table_info(calendar_events)")
-    ccols = [c[1] for c in cursor.fetchall()]
-    if 'target_user_id' not in ccols:
+    cols = [c[1] for c in cursor.fetchall()]
+    if 'target_user_id' not in cols:
         cursor.execute("ALTER TABLE calendar_events ADD COLUMN target_user_id INTEGER")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games_state (
             user_id INTEGER PRIMARY KEY,
@@ -99,6 +107,7 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS media_albums (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +122,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_family_id ON media_albums(family_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_created_at ON media_albums(created_at)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS health_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +139,7 @@ def init_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS budget_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,6 +155,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_family_date ON budget_transactions(family_id, transaction_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_user ON budget_transactions(user_id)")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS budget_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +174,7 @@ def init_db():
         ]
         for name, typ, icon in default_categories:
             cursor.execute("INSERT INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", (name, typ, icon))
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS premium_users (
             user_id INTEGER PRIMARY KEY,
@@ -178,9 +191,29 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
     conn.commit()
     conn.close()
 
+# ---------- ФУНКЦИИ ИНИЦИАЛИЗАЦИИ ОТДЕЛЬНЫХ ТАБЛИЦ (для совместимости) ----------
+def init_chat_history_table():
+    init_db()  # или можно просто вызвать init_db, он уже создаст таблицы
+def init_family_feed_table():
+    init_db()
+def init_calendar_table():
+    init_db()
+def init_games_table():
+    init_db()
+def init_media_table():
+    init_db()
+def init_health_table():
+    init_db()
+def init_budget_table():
+    init_db()
+def init_premium_tables():
+    init_db()
+
+# ---------- ПОЛЬЗОВАТЕЛИ ----------
 def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -216,6 +249,7 @@ def get_user_language(telegram_id):
     conn.close()
     return row[0] if row else 'ru'
 
+# ---------- НАПОМИНАНИЯ ----------
 def add_reminder(telegram_id, kind, text, time_local):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -232,6 +266,7 @@ def list_reminders(telegram_id):
     conn.close()
     return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
 
+# ---------- АКТИВНОСТИ ----------
 def log_activity(telegram_id, action):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -251,6 +286,7 @@ def get_activity_summary(telegram_id):
     conn.close()
     return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
 
+# ---------- РОДСТВЕННИКИ ----------
 def add_relative_link(senior_telegram_id, relative_telegram_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -267,6 +303,7 @@ def get_relatives_for_senior(senior_telegram_id):
     conn.close()
     return [r[0] for r in rows]
 
+# ---------- ИСТОРИЯ ДИАЛОГОВ ----------
 def save_message(user_id: int, role: str, message: str):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -290,6 +327,7 @@ def clear_chat_history(user_id: int):
     conn.commit()
     conn.close()
 
+# ---------- СЕМЕЙНАЯ ЛЕНТА ----------
 def get_family_id_for_user(user_id: int) -> int:
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -336,6 +374,7 @@ def get_family_feed(family_id: int, limit: int = 20) -> list:
         })
     return feed
 
+# ---------- КАЛЕНДАРЬ ----------
 def add_event(user_id: int, event_date: str, title: str, description: str = None,
               event_time: str = None, event_type: str = "other", remind_before_days: int = 1,
               target_user_id: int = None) -> int:
@@ -424,6 +463,7 @@ def get_birthdays_for_date(target_date: str, family_id: int = None) -> list:
     conn.close()
     return [{"id": r[0], "user_id": r[1], "target_user_id": r[2], "title": r[3], "description": r[4]} for r in rows]
 
+# ---------- ИГРЫ ----------
 def save_game_state(user_id: int, game_name: str, game_data: str):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -449,6 +489,7 @@ def clear_game_state(user_id: int):
     conn.commit()
     conn.close()
 
+# ---------- МЕДИА ----------
 def save_media(family_id: int, author_id: int, author_name: str, file_type: str, file_id: str, caption: str = None):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -477,6 +518,7 @@ def get_family_media(family_id: int, limit: int = 20) -> list:
         })
     return media_list
 
+# ---------- МЕДИЦИНСКИЙ ДНЕВНИК ----------
 def add_health_record(user_id, record_date, systolic=None, diastolic=None, pulse=None,
                       blood_sugar=None, weight=None, notes=None, record_time=None):
     conn = sqlite3.connect("family_bot.db")
@@ -528,6 +570,7 @@ def get_health_stats(user_id, days=30):
         "records_count": len(records)
     }
 
+# ---------- ЭКСПОРТ CSV ----------
 def export_chat_history(user_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -545,7 +588,7 @@ def export_health_records(user_id):
     records = get_health_records(user_id, days=365)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Дата", "Время", "Давление (верх/низ)", "Пульс", "Сахар", "Вес", "Заметки"])
+    writer.writerow(["Дата", "Время", "Давление", "Пульс", "Сахар", "Вес", "Заметки"])
     for r in records:
         bp = f"{r['systolic']}/{r['diastolic']}" if r['systolic'] and r['diastolic'] else ""
         writer.writerow([r['date'], r['time'] or "", bp, r['pulse'] or "", r['blood_sugar'] or "", r['weight'] or "", r['notes'] or ""])
@@ -560,6 +603,7 @@ def export_family_feed(family_id):
         writer.writerow([f['author_name'], f['message'], f['message_type'], f['created_at']])
     return output.getvalue()
 
+# ---------- БЮДЖЕТ ----------
 def add_transaction(user_id, family_id, amount, category, transaction_type, transaction_date, description=None):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -636,6 +680,7 @@ def get_category_breakdown(family_id, start_date=None, end_date=None):
         breakdown[row[0]] = {"type": row[1], "total": row[2]}
     return breakdown
 
+# ---------- ПРЕМИУМ ----------
 def is_premium(user_id):
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
