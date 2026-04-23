@@ -263,7 +263,7 @@ async def main_menu_router(update, context):
     elif text in ["🌟 Премиум", "🌟 Premium"]:
         await premium_info(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
-        await help_cmd(update, context)
+        await help_cmd(update, context)   # <--- ИСПРАВЛЕНО: кнопка помощи работает
     elif premium and text in ["👥 События", "👥 Events"]:
         await handle_events(update, context)
     elif premium and text in ["🆘 ПОМОЩЬ", "🆘 HELP"]:
@@ -1186,10 +1186,11 @@ async def notify_family_members(family_id, exclude_user_id, bot, notification):
 
 # ---------- ОСТАЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ ----------
 async def help_cmd(update, context):
+    """Команда /help и кнопка «Помощь»."""
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
     if premium:
-        await update.message.reply_text(
+        text = (
             "🤖 *Бот-компаньон «Семья»*\n"
             "/start – регистрация\n"
             "/menu – главное меню\n"
@@ -1198,11 +1199,10 @@ async def help_cmd(update, context):
             "/games – игры\n"
             "/premium – информация о премиум\n"
             "/activate <код> – активировать премиум\n"
-            "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export",
-            parse_mode="Markdown"
+            "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
         )
     else:
-        await update.message.reply_text(
+        text = (
             "🤖 *Бот-компаньон «Семья»*\n"
             "/start – регистрация\n"
             "/menu – главное меню\n"
@@ -1210,9 +1210,11 @@ async def help_cmd(update, context):
             "/weather – погода\n"
             "/games – игры\n"
             "/premium – информация о премиум\n"
-            "/activate <код> – активировать премиум",
-            parse_mode="Markdown"
+            "/activate <код> – активировать премиум"
         )
+    await update.message.reply_text(text, parse_mode="Markdown")
+    # Сброс диалога не требуется, но для чистоты можно сбросить
+    context.user_data["in_conversation"] = False
 
 async def menu_cmd(update, context):
     lang = await get_user_lang(update)
