@@ -572,7 +572,7 @@ async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет счёт на оплату в Telegram Stars."""
     chat_id = update.effective_chat.id
-    price_stars = 10  # Цена в Stars за 30 дней
+    price_stars = 1  # Цена в Stars за 30 дней
     payload = "premium_30days"
     title = "Премиум-доступ на 30 дней"
     description = "Получите все премиум-функции бота на 30 дней."
