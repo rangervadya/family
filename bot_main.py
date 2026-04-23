@@ -99,7 +99,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ (своя таблица) ----------
+# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ ----------
 def init_family_codes_table():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -628,6 +628,7 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
+        # ВАЖНО: параметр provider_token НЕ ПЕРЕДАЁМ (для Stars он не нужен)
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
@@ -648,12 +649,13 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    logger.info(f"Получен pre_checkout_query для пользователя {query.from_user.id}")
+    logger.info(f"Получен pre_checkout_query от {query.from_user.id} с payload={query.invoice_payload}")
     try:
         if query.invoice_payload != "premium_30days":
             await query.answer(ok=False, error_message="Некорректные данные. Попробуйте ещё раз.")
             return
         await query.answer(ok=True)
+        logger.info(f"Pre-checkout для {query.from_user.id} успешно подтверждён")
     except Exception as e:
         logger.error(f"Ошибка в pre_checkout_callback: {e}")
         await query.answer(ok=False, error_message="Внутренняя ошибка бота. Попробуйте позже.")
