@@ -4,12 +4,12 @@ import io
 from datetime import datetime, timedelta
 import secrets
 
-# ---------- Инициализация базы данных (с миграциями) ----------
+# ---------- Инициализация базы данных (с принудительной миграцией) ----------
 def init_db():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     
-    # Таблица users
+    # --- Таблица users ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -20,13 +20,13 @@ def init_db():
             role TEXT DEFAULT 'senior'
         )
     """)
-    # Добавляем колонку language, если её нет
+    # Добавляем колонку language, если её нет (миграция)
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'language' not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
     
-    # Остальные таблицы
+    # --- Остальные таблицы ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +95,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Добавляем колонку target_user_id, если её нет
     cursor.execute("PRAGMA table_info(calendar_events)")
     cols = [c[1] for c in cursor.fetchall()]
     if 'target_user_id' not in cols:
@@ -198,9 +199,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ---------- Функции инициализации отдельных таблиц ----------
+# ---------- Функции инициализации отдельных таблиц (для совместимости) ----------
 def init_chat_history_table():
-    """Создаёт таблицу chat_history, если её нет."""
+    """Создаёт таблицу chat_history, если её нет (уже есть в init_db, но оставляем для совместимости)"""
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
     cursor.execute("""
