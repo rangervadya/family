@@ -124,6 +124,7 @@ TEXTS = {
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
         'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.",
+        'press_talk': "Нажмите кнопку «💬 Поговорить», чтобы начать диалог.",
     },
     'en': {}
 }
@@ -226,6 +227,8 @@ async def senior_interests(update, context):
     upsert_user(user.id, context.user_data["role"], name=context.user_data.get("name"), age=context.user_data.get("age"), city=context.user_data.get("city"), interests=context.user_data.get("interests"))
     premium = is_premium(user.id)
     await update.message.reply_text(get_text(lang, 'senior_complete', name=context.user_data.get("name", "друг")), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    # Сбрасываем флаг разговора при завершении онбординга
+    context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
 async def relative_code(update, context):
@@ -235,16 +238,25 @@ async def relative_code(update, context):
     upsert_user(user.id, Role.RELATIVE.value, name=user.first_name)
     premium = is_premium(user.id)
     await update.message.reply_text(get_text(lang, 'relative_complete'), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
-# ---------- ОСНОВНОЙ РОУТЕР (с проверкой премиум) ----------
+# ---------- ОСНОВНОЙ РОУТЕР (с проверкой премиум и управлением флагом беседы) ----------
 async def main_menu_router(update, context):
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
     text = update.message.text
+    
+    # Кнопка "Поговорить" включает режим диалога
     if text in ["💬 Поговорить", "💬 Talk"]:
-        await handle_talk(update, context)
-    elif text in ["📅 Напоминания", "📅 Reminders"]:
+        context.user_data["in_conversation"] = True
+        await handle_talk(update, context)   # обрабатываем это же сообщение как начало разговора
+        return
+    
+    # Любая другая кнопка выключает режим диалога
+    context.user_data["in_conversation"] = False
+    
+    if text in ["📅 Напоминания", "📅 Reminders"]:
         await handle_reminders(update, context)
     elif text in ["🌤️ Погода", "🌤️ Weather"]:
         await weather_command(update, context)
@@ -271,10 +283,21 @@ async def main_menu_router(update, context):
     elif premium and text in ["📁 Экспорт", "📁 Export"]:
         await export_menu(update, context)
     else:
-        await handle_talk(update, context)
+        # Неизвестная команда (не из меню) — если не в диалоге, предложить нажать "Поговорить"
+        if not context.user_data.get("in_conversation", False):
+            await update.message.reply_text(get_text(lang, 'press_talk'))
+        else:
+            await handle_talk(update, context)
 
 # ---------- БЕСПЛАТНЫЕ ОБРАБОТЧИКИ ----------
 async def handle_talk(update, context):
+    """Обработчик свободного диалога. Срабатывает только если in_conversation == True."""
+    if not context.user_data.get("in_conversation", False):
+        # Если пользователь не нажал "Поговорить", игнорируем сообщение
+        lang = await get_user_lang(update)
+        await update.message.reply_text(get_text(lang, 'press_talk'))
+        return
+    
     user = update.effective_user
     user_id = user.id
     lang = await get_user_lang(update)
@@ -349,12 +372,15 @@ async def add_meds_text(update, context):
     lang = await get_user_lang(update)
     premium = is_premium(user_id)
     await update.message.reply_text(f"Напоминание на {meds_time} добавлено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    # После добавления напоминания возвращаемся в обычный режим (не в диалог)
+    context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
 async def meds_cancel(update, context):
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
     await update.message.reply_text("Отменено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
 # ---------- ЕЖЕДНЕВНЫЙ ОПРОС ----------
@@ -411,6 +437,7 @@ TRUTH_OR_LIE = [
 async def games_menu(update, context):
     lang = await get_user_lang(update)
     await update.message.reply_text("🎮 *Игры*", reply_markup=get_games_keyboard(lang), parse_mode="Markdown")
+    context.user_data["in_conversation"] = False
 
 async def play_riddle(update, context):
     uid = update.effective_user.id
@@ -636,6 +663,7 @@ async def health_menu(update, context):
         return
     keyboard = [["📝 Добавить запись", "📊 Статистика"], ["📋 Мои записи", "📈 Графики"], ["🔙 Назад"]]
     await update.message.reply_text("🏥 *Медицинский дневник*", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
+    context.user_data["in_conversation"] = False
     return HealthState.CHOOSE.value
 
 async def health_menu_router(update, context):
@@ -659,6 +687,7 @@ async def health_menu_router(update, context):
         lang = await get_user_lang(update)
         premium = is_premium(update.effective_user.id)
         await update.message.reply_text("Назад", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+        context.user_data["in_conversation"] = False
         return -1
     return -1
 
@@ -762,6 +791,7 @@ async def health_add_notes(update, context):
         notes=notes
     )
     await update.message.reply_text("✅ Запись добавлена!", reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    context.user_data["in_conversation"] = False
     return -1
 
 async def health_stats_cmd(update, context):
@@ -841,6 +871,7 @@ async def budget_menu(update, context):
         return -1
     keyboard = [["➕ Добавить транзакцию", "📊 Статистика"], ["📋 Список операций", "🏷️ Категории"], ["🔙 Назад"]]
     await update.message.reply_text("💰 Семейный бюджет", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    context.user_data["in_conversation"] = False
     return BudgetState.CHOOSE.value
 
 async def budget_menu_router(update, context):
@@ -864,6 +895,7 @@ async def budget_menu_router(update, context):
         lang = await get_user_lang(update)
         premium = is_premium(update.effective_user.id)
         await update.message.reply_text("Назад", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+        context.user_data["in_conversation"] = False
         return -1
     return -1
 
@@ -924,6 +956,7 @@ async def budget_add_description(update, context):
         return -1
     add_transaction(user_id, family_id, context.user_data["budget_amount"], context.user_data["budget_category"], context.user_data["budget_type"], context.user_data["budget_date"], desc)
     await update.message.reply_text(get_text(await get_user_lang(update), 'budget_add_success'), reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    context.user_data["in_conversation"] = False
     return -1
 
 async def budget_stats_cmd(update, context):
@@ -972,6 +1005,7 @@ async def export_menu(update, context):
         return -1
     keyboard = [["📋 История диалогов", "🏥 Медицинские записи"], ["👨‍👩‍👧 Семейная лента", "🔙 Назад"]]
     await update.message.reply_text("📁 *Экспорт данных*", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
+    context.user_data["in_conversation"] = False
     return ExportState.CHOOSE.value
 
 async def export_choice(update, context):
@@ -997,6 +1031,7 @@ async def export_choice(update, context):
         lang = await get_user_lang(update)
         premium = is_premium(update.effective_user.id)
         await update.message.reply_text("Назад", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+        context.user_data["in_conversation"] = False
         return -1
     return -1
 
@@ -1069,6 +1104,7 @@ async def add_event_remind_days(update, context):
         target_user_id=context.user_data.get("target_user_id")
     )
     await update.message.reply_text("Событие добавлено!", reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    context.user_data["in_conversation"] = False
     return -1
 
 async def events_list_cmd(update, context):
@@ -1191,6 +1227,7 @@ async def menu_cmd(update, context):
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
     await update.message.reply_text("Меню", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    context.user_data["in_conversation"] = False
 
 async def set_city(update, context):
     user_id = update.effective_user.id
@@ -1414,6 +1451,7 @@ def build_application():
 
     # Роутер главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
+    # fallback для обработки текста, если не отработал роутер (например, в диалоге)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_talk), group=3)
 
     # JobQueue
