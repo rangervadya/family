@@ -21,7 +21,6 @@ from telegram.ext import (
     ContextTypes, JobQueue, filters, CallbackQueryHandler, PreCheckoutQueryHandler
 )
 from telegram.request import HTTPXRequest
-from telegram.error import Conflict
 
 from bot_config import get_settings
 from ai_stubs import generate_companion_reply
@@ -598,7 +597,7 @@ async def handle_voice(update, context):
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка обработки голоса.")
 
-# ---------- ПРЕМИУМ И ОПЛАТА (ИСПРАВЛЕНО) ----------
+# ---------- ПРЕМИУМ И ОПЛАТА (ИСПРАВЛЕНО - ДОБАВЛЕН provider_token="") ----------
 async def premium_info(update, context):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -629,12 +628,13 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
-        # ВАЖНО: НЕ передаём provider_token! Для Stars он не нужен.
+        # ВАЖНО: для Stars нужно передавать provider_token="" (пустая строка)
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
             description=description,
             payload=payload,
+            provider_token="",  # ОБЯЗАТЕЛЬНЫЙ параметр для вашей версии библиотеки
             currency="XTR",
             prices=[LabeledPrice(label="XTR", amount=price_stars)],
             start_parameter="premium_payment",
@@ -650,13 +650,12 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    logger.info(f"Получен pre_checkout_query от {query.from_user.id} с payload={query.invoice_payload}")
+    logger.info(f"Получен pre_checkout_query от {query.from_user.id}")
     try:
         if query.invoice_payload != "premium_30days":
             await query.answer(ok=False, error_message="Некорректные данные. Попробуйте ещё раз.")
             return
         await query.answer(ok=True)
-        logger.info(f"Pre-checkout для {query.from_user.id} успешно подтверждён")
     except Exception as e:
         logger.error(f"Ошибка в pre_checkout_callback: {e}")
         await query.answer(ok=False, error_message="Внутренняя ошибка бота. Попробуйте позже.")
@@ -667,7 +666,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     total_amount = payment.total_amount
     payload = payment.invoice_payload
 
-    logger.info(f"Успешный платёж от {user_id}: {total_amount} Stars, payload={payload}")
+    logger.info(f"Успешный платёж от {user_id}: {total_amount} Stars")
 
     if payload == "premium_30days":
         add_premium_user(user_id, days=30)
@@ -1582,16 +1581,13 @@ def run_telegram():
     asyncio.set_event_loop(loop)
     app = build_application()
     async def start_bot():
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
         try:
-            await app.initialize()
-            await app.start()
-            await app.updater.start_polling(drop_pending_updates=True)
-            try:
-                await asyncio.Event().wait()
-            except KeyboardInterrupt:
-                pass
-        except Conflict:
-            logger.error("Конфликт: бот уже запущен. Остановите другой экземпляр.")
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            pass
         finally:
             await app.updater.stop()
             await app.shutdown()
