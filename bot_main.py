@@ -9,6 +9,7 @@ import re
 import json
 import random
 import io
+import string
 from enum import Enum, auto
 from typing import Final, Dict
 from datetime import time, date, timedelta
@@ -74,8 +75,13 @@ from storage import (
     generate_code,
     activate_code,
     get_premium_expiry,
-    get_user
+    get_user,
+    # Добавляем функции для работы с кодами привязки (если их нет в storage, нужно добавить – см. ниже)
+    save_family_code,
+    check_family_code,
+    delete_family_code
 )
+
 from weather import get_weather_summary
 from features_stub import (
     social_events_overview, social_companions_info, social_volunteers_info,
@@ -104,7 +110,7 @@ def run_flask():
 TEXTS = {
     'ru': {
         'start': "Здравствуйте! Я бот-компаньон «Семья». Давайте познакомимся.\nКто вы?\n➤ Я пожилой пользователь\n➤ Я родственник/опекун",
-        'choose_role': "Хорошо! Вы родственник.\nВведите код привязки.",
+        'choose_role': "Хорошо! Вы родственник.\nВведите код привязки, который вам дал пожилой пользователь.",
         'senior_name': "Как вас зовут?",
         'senior_age': "Сколько вам лет?",
         'senior_city': "В каком городе вы живёте?",
@@ -123,8 +129,10 @@ TEXTS = {
         'activate_fail': "❌ Неверный код.",
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
-        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.\n\nКупить за Stars: /buy_premium",
-        'buy_premium_prompt': "🌟 Купить премиум-доступ за Telegram Stars.\nЦена: 10 Stars за 30 дней.",
+        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.\n\nКупить за 1 Star: /buy_premium",
+        'family_code_created': "✅ Код для привязки родственника: `{code}`\nПередайте этот код родственнику. Он должен выбрать «Я родственник» при /start и ввести этот код.",
+        'family_code_error': "❌ Не удалось создать код. Попробуйте позже.",
+        'invalid_family_code': "❌ Неверный код привязки. Попросите пожилого пользователя создать новый код через /create_family_code.",
     },
     'en': {}
 }
@@ -232,11 +240,21 @@ async def senior_interests(update, context):
 
 async def relative_code(update, context):
     lang = await get_user_lang(update)
-    code = update.message.text.strip()
+    code = update.message.text.strip().upper()
     user = update.effective_user
-    upsert_user(user.id, Role.RELATIVE.value, name=user.first_name)
-    premium = is_premium(user.id)
-    await update.message.reply_text(get_text(lang, 'relative_complete'), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    # Проверяем код привязки
+    senior_id = check_family_code(code)
+    if senior_id:
+        # Привязываем родственника
+        add_relative_link(senior_id, user.id)
+        upsert_user(user.id, Role.RELATIVE.value, name=user.first_name)
+        # Удаляем использованный код
+        delete_family_code(code)
+        premium = is_premium(user.id)
+        await update.message.reply_text(get_text(lang, 'relative_complete'), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    else:
+        await update.message.reply_text(get_text(lang, 'invalid_family_code'))
+        return OnboardingState.RELATIVE_CODE.value  # Повторяем запрос кода
     context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
@@ -391,6 +409,7 @@ async def disable_checkin(update, context):
     await update.message.reply_text("Опрос отключён.")
 
 async def add_relative_cmd(update, context):
+    # Старая команда /add_relative – оставляем для совместимости
     if not context.args:
         await update.message.reply_text("/add_relative <ID>")
         return
@@ -401,6 +420,25 @@ async def add_relative_cmd(update, context):
         return
     add_relative_link(senior_id, update.effective_user.id)
     await update.message.reply_text("Родственник привязан.")
+
+# ---------- НОВАЯ КОМАНДА: ГЕНЕРАЦИЯ КОДА ПРИВЯЗКИ ----------
+async def create_family_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Генерирует уникальный код для привязки родственника (только для пожилых пользователей)."""
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    # Проверяем, что пользователь – пожилой
+    user_info = get_user(user_id)
+    if not user_info or user_info.get('role') != 'senior':
+        await update.message.reply_text("❌ Эта команда доступна только для пожилых пользователей (зарегистрированных как «Я пожилой пользователь»).")
+        return
+    # Генерируем случайный код из 6 символов
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    # Сохраняем код в БД
+    success = save_family_code(code, user_id)
+    if success:
+        await update.message.reply_text(get_text(lang, 'family_code_created', code=code))
+    else:
+        await update.message.reply_text(get_text(lang, 'family_code_error'))
 
 # ---------- ИГРЫ ----------
 RIDDLES = [
@@ -556,7 +594,6 @@ async def premium_info(update, context):
         status = get_text(lang, 'premium_active', date=expiry.strftime('%d.%m.%Y'))
     else:
         status = get_text(lang, 'premium_inactive')
-    # Добавляем inline-кнопку для покупки, если нет премиума
     if not premium:
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за Stars", callback_data="buy_premium")]])
         await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=keyboard)
@@ -566,13 +603,12 @@ async def premium_info(update, context):
 async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    lang = await get_user_lang(update)
     await send_invoice(update, context)
 
 async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет счёт на оплату в Telegram Stars."""
     chat_id = update.effective_chat.id
-    price_stars = 1  # Цена в Stars за 30 дней
+    price_stars = 1  # Цена в Stars за 30 дней (изменено на 1)
     payload = "premium_30days"
     title = "Премиум-доступ на 30 дней"
     description = "Получите все премиум-функции бота на 30 дней."
@@ -582,38 +618,33 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title=title,
         description=description,
         payload=payload,
-        provider_token="",  # Для Stars обязательно пустая строка
-        currency="XTR",      # Валюта Telegram Stars
+        provider_token="",
+        currency="XTR",
         prices=[LabeledPrice(label="XTR", amount=price_stars)],
         start_parameter="premium_payment"
     )
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обязательная проверка перед оплатой."""
     query = update.pre_checkout_query
-    await query.answer(ok=True)  # Всегда разрешаем
+    await query.answer(ok=True)
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вызывается после успешной оплаты Stars."""
     user_id = update.effective_user.id
     payment = update.effective_message.successful_payment
-    total_amount = payment.total_amount  # количество Stars
-    payload = payment.invoice_payload     # "premium_30days"
+    total_amount = payment.total_amount
+    payload = payment.invoice_payload
     
-    # Активируем премиум на 30 дней
-    add_premium_user(user_id, days=30)   # предполагаем, что такая функция есть в storage.py
-    # Альтернативно, если функция называется activate_premium, используйте её.
+    if payload == "premium_30days":
+        add_premium_user(user_id, days=30)
     
     lang = await get_user_lang(update)
     await update.effective_message.reply_text(
         f"✅ Оплата {total_amount} Stars получена! Премиум-доступ активирован на 30 дней.\nСпасибо за поддержку! 🎉"
     )
-    # Отправим новую клавиатуру с премиум-функциями
     premium = is_premium(user_id)
     markup = get_premium_keyboard(lang) if premium else get_free_keyboard(lang)
     await update.effective_message.reply_text("Ваше меню обновлено:", reply_markup=markup)
     
-    # Уведомление администратору
     ADMIN_CHAT_ID = 8091619207  # Замените на ваш Telegram ID
     try:
         await context.bot.send_message(
@@ -1263,6 +1294,8 @@ async def help_cmd(update, context):
     )
     if premium:
         text += "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
+    else:
+        text += "Для создания кода привязки родственника используйте /create_family_code (доступно пожилым пользователям)."
     await update.message.reply_text(text, parse_mode="HTML")
     context.user_data["in_conversation"] = False
 
@@ -1354,6 +1387,20 @@ def build_application():
     init_health_table()
     init_budget_table()
     init_premium_tables()
+
+    # Создаём таблицу для кодов привязки, если её нет (можно вынести в storage)
+    import sqlite3
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS family_codes (
+            code TEXT PRIMARY KEY,
+            senior_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
     builder = ApplicationBuilder().token(settings.telegram_token)
     request = HTTPXRequest(
@@ -1461,6 +1508,7 @@ def build_application():
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
     application.add_handler(CommandHandler("disable_checkin", disable_checkin))
     application.add_handler(CommandHandler("add_relative", add_relative_cmd))
+    application.add_handler(CommandHandler("create_family_code", create_family_code))  # Новая команда
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("menu", menu_cmd))
     application.add_handler(CommandHandler("lang", lang_command))
