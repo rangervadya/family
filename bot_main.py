@@ -127,56 +127,40 @@ TEXTS = {
     },
     'en': {}
 }
-
 def get_text(lang, key, **kwargs):
     text = TEXTS.get(lang, TEXTS['ru']).get(key, key)
     return text.format(**kwargs) if kwargs else text
 
-# ---------- КЛАВИАТУРЫ (разные для бесплатных и премиум) ----------
+# ---------- КЛАВИАТУРЫ ----------
 def get_free_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
-        buttons = [
-            ["💬 Talk", "📅 Reminders"],
-            ["🌤️ Weather", "🎮 Games"],
-            ["🌟 Premium", "❓ Help"]
-        ]
+        buttons = [["💬 Talk", "📅 Reminders"], ["🌤️ Weather", "🎮 Games"], ["🌟 Premium", "❓ Help"]]
     else:
-        buttons = [
-            ["💬 Поговорить", "📅 Напоминания"],
-            ["🌤️ Погода", "🎮 Игры"],
-            ["🌟 Премиум", "❓ Помощь"]
-        ]
+        buttons = [["💬 Поговорить", "📅 Напоминания"], ["🌤️ Погода", "🎮 Игры"], ["🌟 Премиум", "❓ Помощь"]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_premium_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
         buttons = [
-            ["💬 Talk", "📅 Reminders"],
-            ["👥 Events", "🆘 HELP"],
-            ["👨‍👩‍👧 Family", "⚙️ Settings"],
-            ["🎮 Games", "🌤️ Weather"],
-            ["📸 Album", "🏥 Health"],
-            ["💰 Budget", "📁 Export"],
+            ["💬 Talk", "📅 Reminders"], ["👥 Events", "🆘 HELP"],
+            ["👨‍👩‍👧 Family", "⚙️ Settings"], ["🎮 Games", "🌤️ Weather"],
+            ["📸 Album", "🏥 Health"], ["💰 Budget", "📁 Export"],
             ["🌟 Premium", "❓ Help"]
         ]
     else:
         buttons = [
-            ["💬 Поговорить", "📅 Напоминания"],
-            ["👥 События", "🆘 ПОМОЩЬ"],
-            ["👨‍👩‍👧 Семья", "⚙️ Настройки"],
-            ["🎮 Игры", "🌤️ Погода"],
-            ["📸 Альбом", "🏥 Здоровье"],
-            ["💰 Бюджет", "📁 Экспорт"],
+            ["💬 Поговорить", "📅 Напоминания"], ["👥 События", "🆘 ПОМОЩЬ"],
+            ["👨‍👩‍👧 Семья", "⚙️ Настройки"], ["🎮 Игры", "🌤️ Погода"],
+            ["📸 Альбом", "🏥 Здоровье"], ["💰 Бюджет", "📁 Экспорт"],
             ["🌟 Премиум", "❓ Помощь"]
         ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_games_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
-        buttons = [["🔮 Riddle", "📖 Words"], ["✅ Truth or Lie", "❌ Exit"]]
+        return ReplyKeyboardMarkup([["🔮 Riddle", "📖 Words"], ["✅ Truth or Lie", "❌ Exit"]], resize_keyboard=True)
     else:
-        buttons = [["🔮 Загадка", "📖 Слова"], ["✅ Правда или ложь", "❌ Выйти"]]
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+        return ReplyKeyboardMarkup([["🔮 Загадка", "📖 Слова"], ["✅ Правда или ложь", "❌ Выйти"]], resize_keyboard=True)
 
 async def get_user_lang(update):
     uid = update.effective_user.id
@@ -270,7 +254,6 @@ async def main_menu_router(update, context):
         await premium_info(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
         await help_cmd(update, context)
-    # Премиум-кнопки (только если премиум)
     elif premium and text in ["👥 События", "👥 Events"]:
         await handle_events(update, context)
     elif premium and text in ["🆘 ПОМОЩЬ", "🆘 HELP"]:
@@ -315,8 +298,7 @@ async def handle_reminders(update, context):
         return
     lines = ["📋 Ваши напоминания:"]
     for r in reminders:
-        status = "✅" if r["enabled"] else "⏸"
-        lines.append(f"{status} {r['time_local']} — {r['text']}")
+        lines.append(f"{'✅' if r['enabled'] else '⏸'} {r['time_local']} — {r['text']}")
     await update.message.reply_text("\n".join(lines))
 
 async def weather_command(update, context):
@@ -333,7 +315,79 @@ async def weather_command(update, context):
         return
     await update.message.reply_text(f"🌤️ {summary}")
 
-# ---------- ИГРЫ (бесплатно) ----------
+# ---------- НАПОМИНАНИЯ О ЛЕКАРСТВАХ ----------
+async def add_meds_start(update, context):
+    await update.message.reply_text("Время (ЧЧ:ММ):", reply_markup=ReplyKeyboardRemove())
+    return MedsState.ASK_TIME.value
+
+async def add_meds_time(update, context):
+    parts = update.message.text.split(":")
+    if len(parts)!=2 or not parts[0].isdigit() or not parts[1].isdigit():
+        await update.message.reply_text("Неверный формат.")
+        return MedsState.ASK_TIME.value
+    h,m = int(parts[0]), int(parts[1])
+    if not (0<=h<=23 and 0<=m<=59):
+        await update.message.reply_text("Часы 0-23, минуты 0-59.")
+        return MedsState.ASK_TIME.value
+    context.user_data["meds_time"] = f"{h:02d}:{m:02d}"
+    await update.message.reply_text("Что напоминать?")
+    return MedsState.ASK_TEXT.value
+
+async def meds_reminder_job(context):
+    job = context.job
+    await context.bot.send_message(job.chat_id, text=f"💊 {job.data['text']}")
+    log_activity(job.chat_id, "reminder_done")
+
+async def add_meds_text(update, context):
+    user_id = update.effective_user.id
+    meds_time = context.user_data.get("meds_time")
+    text = update.message.text.strip() or "Принять лекарство"
+    add_reminder(user_id, "meds", text, meds_time)
+    job_queue = context.job_queue
+    h,m = map(int, meds_time.split(":"))
+    job_queue.run_daily(meds_reminder_job, time=time(hour=h, minute=m), chat_id=user_id, data={"text": text})
+    lang = await get_user_lang(update)
+    premium = is_premium(user_id)
+    await update.message.reply_text(f"Напоминание на {meds_time} добавлено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    return ConversationHandler.END
+
+async def meds_cancel(update, context):
+    lang = await get_user_lang(update)
+    premium = is_premium(update.effective_user.id)
+    await update.message.reply_text("Отменено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+    return ConversationHandler.END
+
+# ---------- ЕЖЕДНЕВНЫЙ ОПРОС ----------
+async def daily_checkin(context):
+    await context.bot.send_message(context.job.chat_id, "Как вы себя чувствуете? 🌷")
+
+async def enable_checkin(update, context):
+    chat_id = update.effective_chat.id
+    job_queue = context.job_queue
+    for job in job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
+        job.schedule_removal()
+    job_queue.run_daily(daily_checkin, time=time(hour=10, minute=0), chat_id=chat_id, name=f"checkin-{chat_id}")
+    await update.message.reply_text("Ежедневный опрос включён в 10:00.")
+
+async def disable_checkin(update, context):
+    chat_id = update.effective_chat.id
+    for job in context.job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
+        job.schedule_removal()
+    await update.message.reply_text("Опрос отключён.")
+
+async def add_relative_cmd(update, context):
+    if not context.args:
+        await update.message.reply_text("/add_relative <ID>")
+        return
+    try:
+        senior_id = int(context.args[0])
+    except:
+        await update.message.reply_text("ID должен быть числом.")
+        return
+    add_relative_link(senior_id, update.effective_user.id)
+    await update.message.reply_text("Родственник привязан.")
+
+# ---------- ИГРЫ ----------
 RIDDLES = [
     ("Висит груша, нельзя скушать. Что это?", "лампочка"),
     ("Не лает, не кусает, а в дом не пускает.", "замок"),
@@ -347,16 +401,11 @@ RIDDLES = [
     ("Не вода, не суша – на лодке не уплывёшь и ногами не пройдёшь.", "болото"),
 ]
 TRUTH_OR_LIE = [
-    ("Пингвины умеют летать.", False),
-    ("Верблюды хранят воду в горбах.", False),
-    ("Страусы прячут голову в песок.", False),
-    ("Лимон содержит больше сахара, чем клубника.", True),
-    ("Язык хамелеона длиннее его тела.", True),
-    ("Банан – это ягода.", True),
-    ("У осьминога три сердца.", True),
-    ("Шоколад ядовит для собак.", True),
-    ("Улитки могут спать три года.", True),
-    ("Стекло – это жидкое вещество.", False),
+    ("Пингвины умеют летать.", False), ("Верблюды хранят воду в горбах.", False),
+    ("Страусы прячут голову в песок.", False), ("Лимон содержит больше сахара, чем клубника.", True),
+    ("Язык хамелеона длиннее его тела.", True), ("Банан – это ягода.", True),
+    ("У осьминога три сердца.", True), ("Шоколад ядовит для собак.", True),
+    ("Улитки могут спать три года.", True), ("Стекло – это жидкое вещество.", False),
 ]
 
 async def games_menu(update, context):
@@ -364,20 +413,20 @@ async def games_menu(update, context):
     await update.message.reply_text("🎮 *Игры*", reply_markup=get_games_keyboard(lang), parse_mode="Markdown")
 
 async def play_riddle(update, context):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
     r = random.choice(RIDDLES)
-    save_game_state(user_id, "riddle", json.dumps({"q": r[0], "a": r[1]}))
+    save_game_state(uid, "riddle", json.dumps({"q": r[0], "a": r[1]}))
     await update.message.reply_text(f"🔮 *Загадка:*\n{r[0]}", parse_mode="Markdown")
 
 async def play_words(update, context):
-    user_id = update.effective_user.id
-    save_game_state(user_id, "words", json.dumps({"last": None, "used": []}))
+    uid = update.effective_user.id
+    save_game_state(uid, "words", json.dumps({"last": None, "used": []}))
     await update.message.reply_text("📖 *Игра «Слова»*\nНапишите слово (существительное, ед.ч.):", parse_mode="Markdown")
 
 async def play_truth_or_lie(update, context):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
     q,a = random.choice(TRUTH_OR_LIE)
-    save_game_state(user_id, "truth", json.dumps({"q": q, "a": a}))
+    save_game_state(uid, "truth", json.dumps({"q": q, "a": a}))
     await update.message.reply_text(f"✅ *Правда или ложь?*\n{q}\nОтветьте «правда» или «ложь».", parse_mode="Markdown")
 
 async def exit_game(update, context):
@@ -441,106 +490,7 @@ async def handle_game_answer(update, context):
             await update.message.reply_text(f"🎉 Я не могу найти слово на букву '{new_last}'! Вы победили!")
             clear_game_state(uid)
 
-# ---------- НАПОМИНАНИЯ О ЛЕКАРСТВАХ (бесплатно) ----------
-async def add_meds_start(update, context):
-    await update.message.reply_text("Время (ЧЧ:ММ):", reply_markup=ReplyKeyboardRemove())
-    return MedsState.ASK_TIME.value
-
-async def add_meds_time(update, context):
-    parts = update.message.text.split(":")
-    if len(parts)!=2 or not parts[0].isdigit() or not parts[1].isdigit():
-        await update.message.reply_text("Неверный формат.")
-        return MedsState.ASK_TIME.value
-    h,m = int(parts[0]), int(parts[1])
-    if not (0<=h<=23 and 0<=m<=59):
-        await update.message.reply_text("Часы 0-23, минуты 0-59.")
-        return MedsState.ASK_TIME.value
-    context.user_data["meds_time"] = f"{h:02d}:{m:02d}"
-    await update.message.reply_text("Что напоминать?")
-    return MedsState.ASK_TEXT.value
-
-async def meds_reminder_job(context):
-    job = context.job
-    await context.bot.send_message(job.chat_id, text=f"💊 {job.data['text']}")
-    log_activity(job.chat_id, "reminder_done")
-
-async def add_meds_text(update, context):
-    user_id = update.effective_user.id
-    meds_time = context.user_data.get("meds_time")
-    text = update.message.text.strip() or "Принять лекарство"
-    add_reminder(user_id, "meds", text, meds_time)
-    job_queue = context.job_queue
-    h,m = map(int, meds_time.split(":"))
-    job_queue.run_daily(meds_reminder_job, time=time(hour=h, minute=m), chat_id=user_id, data={"text": text})
-    lang = await get_user_lang(update)
-    premium = is_premium(user_id)
-    await update.message.reply_text(f"Напоминание на {meds_time} добавлено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
-    return ConversationHandler.END
-
-async def meds_cancel(update, context):
-    lang = await get_user_lang(update)
-    premium = is_premium(update.effective_user.id)
-    await update.message.reply_text("Отменено.", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
-    return ConversationHandler.END
-
-# ---------- ЕЖЕДНЕВНЫЙ ОПРОС (бесплатно) ----------
-async def daily_checkin(context):
-    await context.bot.send_message(context.job.chat_id, "Как вы себя чувствуете? 🌷")
-
-async def enable_checkin(update, context):
-    chat_id = update.effective_chat.id
-    job_queue = context.job_queue
-    for job in job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
-        job.schedule_removal()
-    job_queue.run_daily(daily_checkin, time=time(hour=10, minute=0), chat_id=chat_id, name=f"checkin-{chat_id}")
-    await update.message.reply_text("Ежедневный опрос включён в 10:00.")
-
-async def disable_checkin(update, context):
-    chat_id = update.effective_chat.id
-    for job in context.job_queue.get_jobs_by_name(f"checkin-{chat_id}"):
-        job.schedule_removal()
-    await update.message.reply_text("Опрос отключён.")
-
-# ---------- ПРЕМИУМ (активация, информация, генерация кода) ----------
-async def premium_info(update, context):
-    user_id = update.effective_user.id
-    lang = await get_user_lang(update)
-    premium = is_premium(user_id)
-    if premium:
-        expiry = get_premium_expiry(user_id)
-        status = get_text(lang, 'premium_active', date=expiry.strftime('%d.%m.%Y'))
-    else:
-        status = get_text(lang, 'premium_inactive')
-    await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
-
-async def activate_premium(update, context):
-    user_id = update.effective_user.id
-    lang = await get_user_lang(update)
-    if not context.args:
-        await update.message.reply_text(get_text(lang, 'activate_usage'))
-        return
-    code = context.args[0].upper()
-    if activate_code(code, user_id):
-        await update.message.reply_text(get_text(lang, 'activate_success'), reply_markup=get_premium_keyboard(lang))
-    else:
-        await update.message.reply_text(get_text(lang, 'activate_fail'))
-
-async def gen_premium_code(update, context):
-    ADMIN_ID = 8091619207  # ЗАМЕНИТЕ НА СВОЙ TELEGRAM ID
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Недостаточно прав.")
-        return
-    if not context.args:
-        await update.message.reply_text("/gen_code <дни>")
-        return
-    try:
-        days = int(context.args[0])
-        code = generate_code(days)
-        await update.message.reply_text(f"Код: `{code}` на {days} дней", parse_mode="Markdown")
-    except:
-        await update.message.reply_text("Ошибка.")
-
-# ---------- ГОЛОСОВЫЕ СООБЩЕНИЯ (бесплатно) ----------
+# ---------- ГОЛОСОВЫЕ СООБЩЕНИЯ ----------
 async def handle_voice(update, context):
     user = update.effective_user
     user_id = user.id
@@ -580,180 +530,45 @@ async def handle_voice(update, context):
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка обработки голоса.")
 
-# ---------- ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ (бесплатные) ----------
-async def help_cmd(update, context):
+# ---------- ПРЕМИУМ-ОБРАБОТЧИКИ (с проверкой is_premium) ----------
+async def premium_info(update, context):
+    user_id = update.effective_user.id
     lang = await get_user_lang(update)
-    premium = is_premium(update.effective_user.id)
+    premium = is_premium(user_id)
     if premium:
-        await update.message.reply_text(
-            "🤖 *Бот-компаньон «Семья»*\n"
-            "/start – регистрация\n"
-            "/menu – главное меню\n"
-            "/add_meds – напоминание о лекарствах\n"
-            "/weather – погода\n"
-            "/games – игры\n"
-            "/premium – информация о премиум\n"
-            "/activate <код> – активировать премиум\n"
-            "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export",
-            parse_mode="Markdown"
-        )
+        expiry = get_premium_expiry(user_id)
+        status = get_text(lang, 'premium_active', date=expiry.strftime('%d.%m.%Y'))
     else:
-        await update.message.reply_text(
-            "🤖 *Бот-компаньон «Семья»*\n"
-            "/start – регистрация\n"
-            "/menu – главное меню\n"
-            "/add_meds – напоминание о лекарствах\n"
-            "/weather – погода\n"
-            "/games – игры\n"
-            "/premium – информация о премиум\n"
-            "/activate <код> – активировать премиум",
-            parse_mode="Markdown"
-        )
+        status = get_text(lang, 'premium_inactive')
+    await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
 
-async def menu_cmd(update, context):
-    lang = await get_user_lang(update)
-    premium = is_premium(update.effective_user.id)
-    await update.message.reply_text("Меню", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
-
-async def set_city(update, context):
+async def activate_premium(update, context):
     user_id = update.effective_user.id
-    text = update.message.text.lower()
-    match = re.search(r'(мой город|живу в|город)\s+([а-яА-ЯёЁa-zA-Z\s\-]+)', text)
-    if match:
-        city = match.group(2).strip().capitalize()
-        if len(city) > 1:
-            user = get_user(user_id) or {}
-            upsert_user(user_id, role=user.get("role","senior"), name=user.get("name"), city=city)
-            await update.message.reply_text(f"✅ Запомнила: {city}")
+    lang = await get_user_lang(update)
+    if not context.args:
+        await update.message.reply_text(get_text(lang, 'activate_usage'))
+        return
+    code = context.args[0].upper()
+    if activate_code(code, user_id):
+        await update.message.reply_text(get_text(lang, 'activate_success'), reply_markup=get_premium_keyboard(lang))
     else:
-        await update.message.reply_text("Напишите: «Я живу в Москве»")
+        await update.message.reply_text(get_text(lang, 'activate_fail'))
 
-async def lang_command(update, context):
-    if not context.args:
-        await update.message.reply_text("/lang ru или /lang en")
+async def gen_premium_code(update, context):
+    ADMIN_ID = 8091619207  # ЗАМЕНИТЕ НА СВОЙ TELEGRAM ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Недостаточно прав.")
         return
-    new = context.args[0].lower()
-    if new not in ['ru','en']:
-        await update.message.reply_text("Поддерживаются ru, en")
-        return
-    set_user_language(update.effective_user.id, new)
-    await update.message.reply_text(f"Язык изменён на {new}")
-
-async def clear_history_cmd(update, context):
-    clear_chat_history(update.effective_user.id)
-    await update.message.reply_text("История диалогов очищена.")
-
-async def add_relative_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("/add_relative <ID>")
+        await update.message.reply_text("/gen_code <дни>")
         return
     try:
-        senior_id = int(context.args[0])
+        days = int(context.args[0])
+        code = generate_code(days)
+        await update.message.reply_text(f"Код: `{code}` на {days} дней", parse_mode="Markdown")
     except:
-        await update.message.reply_text("ID должен быть числом.")
-        return
-    add_relative_link(senior_id, update.effective_user.id)
-    await update.message.reply_text("Родственник привязан.")
+        await update.message.reply_text("Ошибка.")
 
-async def companions_cmd(update, context):
-    await update.message.reply_text(social_companions_info())
-async def volunteers_cmd(update, context):
-    await update.message.reply_text(social_volunteers_info())
-async def health_extra_cmd(update, context):
-    await update.message.reply_text(health_extra_info())
-async def helper_cmd(update, context):
-    await update.message.reply_text(home_helper_info())
-async def nostalgia_cmd(update, context):
-    await update.message.reply_text(nostalgia_menu_text())
-async def courses_cmd(update, context):
-    await update.message.reply_text(courses_menu_text())
-async def achievements_cmd(update, context):
-    await update.message.reply_text(achievements_text())
-async def admin_analytics_cmd(update, context):
-    await update.message.reply_text(analytics_info_text())
-async def voice_help(update, context):
-    await update.message.reply_text(voice_interface_info())
-
-# ---------- ПРЕМИУМ-КОМАНДЫ (с проверкой) ----------
-async def family_send_cmd(update, context):
-    if not is_premium(update.effective_user.id):
-        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
-        return
-    user_id = update.effective_user.id
-    lang = await get_user_lang(update)
-    family_id = get_family_id_for_user(user_id)
-    if not family_id:
-        await update.message.reply_text(get_text(lang, 'not_relative'))
-        return
-    if not context.args:
-        await update.message.reply_text("/family_send <текст>")
-        return
-    msg = " ".join(context.args)
-    user_name = context.user_data.get("name") or update.effective_user.first_name
-    add_to_family_feed(family_id, user_id, user_name, msg)
-    await notify_family_members(family_id, user_id, context.bot, f"📢 {user_name}: {msg}")
-    await update.message.reply_text("Отправлено.")
-
-async def family_feed_cmd(update, context):
-    if not is_premium(update.effective_user.id):
-        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
-        return
-    user_id = update.effective_user.id
-    lang = await get_user_lang(update)
-    family_id = get_family_id_for_user(user_id)
-    if not family_id:
-        await update.message.reply_text(get_text(lang, 'not_relative'))
-        return
-    feed = get_family_feed(family_id, limit=10)
-    if not feed:
-        await update.message.reply_text(get_text(lang, 'family_feed_empty'))
-        return
-    lines = ["📋 Семейная лента:"]
-    for entry in feed:
-        lines.append(f"{entry['author_name']} ({entry['created_at'][:16]}): {entry['message']}")
-    await update.message.reply_text("\n".join(lines))
-
-async def add_event_cmd(update, context):
-    if not is_premium(update.effective_user.id):
-        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
-        return
-    # Запуск ConversationHandler календаря – он уже зарегистрирован отдельно,
-    # но первый шаг можно вызвать напрямую. Но проще использовать отдельный обработчик.
-    await add_event_start(update, context)
-
-async def events_list_cmd(update, context):
-    if not is_premium(update.effective_user.id):
-        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
-        return
-    user_id = update.effective_user.id
-    today = date.today().isoformat()
-    events = get_events_for_user(user_id, from_date=today, limit=20)
-    if not events:
-        await update.message.reply_text("Нет событий.")
-        return
-    lines = ["📅 Ближайшие события:"]
-    for ev in events:
-        lines.append(f"{ev['date']} {ev['time'] or ''}: {ev['title']}")
-    await update.message.reply_text("\n".join(lines))
-
-async def delete_event_cmd(update, context):
-    if not is_premium(update.effective_user.id):
-        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
-        return
-    if not context.args:
-        await update.message.reply_text("/delete_event <id>")
-        return
-    try:
-        eid = int(context.args[0])
-    except:
-        await update.message.reply_text("ID число.")
-        return
-    if delete_event(eid, update.effective_user.id):
-        await update.message.reply_text("Удалено.")
-    else:
-        await update.message.reply_text("Не найдено.")
-
-# ---------- ПРОЧИЕ ПРЕМИУМ-ОБРАБОТЧИКИ ----------
 async def handle_events(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
@@ -792,22 +607,29 @@ async def handle_settings(update, context):
         return
     await update.message.reply_text("Настройки: пока пусто.")
 
-async def notify_family_members(family_id, exclude_user_id, bot, notification):
-    import sqlite3
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
-    relatives = [r[0] for r in cursor.fetchall()]
-    if family_id != exclude_user_id:
-        relatives.append(family_id)
-    conn.close()
-    for mid in relatives:
-        try:
-            await bot.send_message(mid, notification, parse_mode="Markdown")
-        except:
-            pass
+async def show_album(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(await get_user_lang(update), 'not_relative'))
+        return
+    media = get_family_media(family_id, limit=10)
+    if not media:
+        await update.message.reply_text("Альбом пуст.")
+        return
+    for m in media:
+        caption = f"📅 {str(m['date'])[:16]}\n👤 {m['author']}"
+        if m['caption']:
+            caption += f"\n💬 {m['caption']}"
+        if m['type'] == 'photo':
+            await update.message.reply_photo(photo=m['file_id'], caption=caption)
+        else:
+            await update.message.reply_video(video=m['file_id'], caption=caption)
 
-# ---------- МЕДИЦИНСКИЙ ДНЕВНИК (премиум) – основные функции ----------
+# ---------- МЕДИЦИНСКИЙ ДНЕВНИК (полные функции) ----------
 async def health_menu(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
@@ -831,10 +653,7 @@ async def health_menu_router(update, context):
         await health_list_cmd(update, context)
         return -1
     elif text in ["📈 Графики", "📈 Charts"]:
-        if not is_premium(update.effective_user.id):
-            await update.message.reply_text("⭐ Только премиум.")
-        else:
-            await health_chart_cmd(update, context)
+        await health_chart_cmd(update, context)
         return -1
     elif text in ["🔙 Назад", "🔙 Back"]:
         lang = await get_user_lang(update)
@@ -843,18 +662,107 @@ async def health_menu_router(update, context):
         return -1
     return -1
 
-# Здесь нужно вставить полные функции добавления записей: health_add_date, health_add_time, health_add_systolic, health_add_diastolic, health_add_pulse, health_add_sugar, health_add_weight, health_add_notes.
-# Они уже были в предыдущих версиях. Для краткости я приведу только шаблон, но вы скопируете их из своего старого кода.
-
 async def health_add_date(update, context):
     date_str = update.message.text.strip()
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
-        await update.message.reply_text("Неверный формат.")
+        await update.message.reply_text("❌ Неверный формат. Используйте ГГГГ-ММ-ДД.")
         return HealthState.DATE.value
     context.user_data["health_date"] = date_str
-    await update.message.reply_text("Время ЧЧ:ММ или - :")
+    await update.message.reply_text("Введите время (ЧЧ:ММ) или '-' пропустить:")
     return HealthState.TIME.value
-# ... остальные аналогично (как в вашем старом коде)
+
+async def health_add_time(update, context):
+    time_str = update.message.text.strip()
+    if time_str == "-":
+        context.user_data["health_time"] = None
+    elif re.match(r'^\d{2}:\d{2}$', time_str):
+        context.user_data["health_time"] = time_str
+    else:
+        await update.message.reply_text("❌ Неверный формат. Введите ЧЧ:ММ или '-'.")
+        return HealthState.TIME.value
+    await update.message.reply_text("Введите верхнее давление (систолическое) или '-' пропустить:")
+    return HealthState.SYSTOLIC.value
+
+async def health_add_systolic(update, context):
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_systolic"] = None
+    elif val.isdigit():
+        context.user_data["health_systolic"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'.")
+        return HealthState.SYSTOLIC.value
+    await update.message.reply_text("Введите нижнее давление (диастолическое) или '-' пропустить:")
+    return HealthState.DIASTOLIC.value
+
+async def health_add_diastolic(update, context):
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_diastolic"] = None
+    elif val.isdigit():
+        context.user_data["health_diastolic"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'.")
+        return HealthState.DIASTOLIC.value
+    await update.message.reply_text("Введите пульс или '-' пропустить:")
+    return HealthState.PULSE.value
+
+async def health_add_pulse(update, context):
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_pulse"] = None
+    elif val.isdigit():
+        context.user_data["health_pulse"] = int(val)
+    else:
+        await update.message.reply_text("Введите число или '-'.")
+        return HealthState.PULSE.value
+    await update.message.reply_text("Введите уровень сахара (ммоль/л) или '-' пропустить:")
+    return HealthState.SUGAR.value
+
+async def health_add_sugar(update, context):
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_sugar"] = None
+    else:
+        try:
+            context.user_data["health_sugar"] = float(val)
+        except:
+            await update.message.reply_text("Введите число (например, 5.6) или '-'.")
+            return HealthState.SUGAR.value
+    await update.message.reply_text("Введите вес (кг) или '-' пропустить:")
+    return HealthState.WEIGHT.value
+
+async def health_add_weight(update, context):
+    val = update.message.text.strip()
+    if val == "-":
+        context.user_data["health_weight"] = None
+    else:
+        try:
+            context.user_data["health_weight"] = float(val)
+        except:
+            await update.message.reply_text("Введите число (например, 70.5) или '-'.")
+            return HealthState.WEIGHT.value
+    await update.message.reply_text("Введите заметки (или '-' пропустить):")
+    return HealthState.NOTES.value
+
+async def health_add_notes(update, context):
+    notes = update.message.text.strip()
+    if notes == "-":
+        notes = None
+    user_id = update.effective_user.id
+    add_health_record(
+        user_id=user_id,
+        record_date=context.user_data["health_date"],
+        record_time=context.user_data.get("health_time"),
+        systolic=context.user_data.get("health_systolic"),
+        diastolic=context.user_data.get("health_diastolic"),
+        pulse=context.user_data.get("health_pulse"),
+        blood_sugar=context.user_data.get("health_sugar"),
+        weight=context.user_data.get("health_weight"),
+        notes=notes
+    )
+    await update.message.reply_text("✅ Запись добавлена!", reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    return -1
 
 async def health_stats_cmd(update, context):
     if not is_premium(update.effective_user.id):
@@ -926,7 +834,7 @@ async def health_chart_cmd(update, context):
     except ImportError:
         await update.message.reply_text("⚠️ Для графиков нужна библиотека matplotlib.")
 
-# ---------- БЮДЖЕТ (премиум) – основные функции ----------
+# ---------- БЮДЖЕТ (полные функции) ----------
 async def budget_menu(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
@@ -959,8 +867,64 @@ async def budget_menu_router(update, context):
         return -1
     return -1
 
-# Здесь нужны функции добавления транзакции (бюджета) – они у вас были.
-# Я пропущу их для краткости, но вы скопируете из старой версии. Все они должны начинаться с проверки is_premium.
+async def budget_add_type(update, context):
+    choice = update.message.text.strip()
+    if choice == "1":
+        context.user_data["budget_type"] = "income"
+    elif choice == "2":
+        context.user_data["budget_type"] = "expense"
+    else:
+        await update.message.reply_text("Введите 1 или 2.")
+        return BudgetState.TYPE.value
+    categories = get_categories()
+    cat_list = "\n".join([f"{c['name']} ({c['icon']})" for c in categories if c['type'] == context.user_data["budget_type"]])
+    await update.message.reply_text(f"Категория:\n{cat_list}")
+    return BudgetState.CATEGORY.value
+
+async def budget_add_category(update, context):
+    cat = update.message.text.strip()
+    categories = get_categories()
+    if not any(c['name'] == cat for c in categories if c['type'] == context.user_data["budget_type"]):
+        await update.message.reply_text("Неверная категория.")
+        return BudgetState.CATEGORY.value
+    context.user_data["budget_category"] = cat
+    await update.message.reply_text("Сумма (число):")
+    return BudgetState.AMOUNT.value
+
+async def budget_add_amount(update, context):
+    try:
+        amt = float(update.message.text.strip())
+        if amt <= 0: raise ValueError
+        context.user_data["budget_amount"] = amt
+    except:
+        await update.message.reply_text("Введите положительное число.")
+        return BudgetState.AMOUNT.value
+    await update.message.reply_text("Дата (ГГГГ-ММ-ДД) или - сегодня:")
+    return BudgetState.DATE.value
+
+async def budget_add_date(update, context):
+    date_str = update.message.text.strip()
+    if date_str == "-":
+        date_str = date.today().isoformat()
+    elif not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        await update.message.reply_text("Неверный формат.")
+        return BudgetState.DATE.value
+    context.user_data["budget_date"] = date_str
+    await update.message.reply_text("Описание (или - пропустить):")
+    return BudgetState.DESCRIPTION.value
+
+async def budget_add_description(update, context):
+    desc = update.message.text.strip()
+    if desc == "-":
+        desc = None
+    user_id = update.effective_user.id
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(await get_user_lang(update), 'not_relative'))
+        return -1
+    add_transaction(user_id, family_id, context.user_data["budget_amount"], context.user_data["budget_category"], context.user_data["budget_type"], context.user_data["budget_date"], desc)
+    await update.message.reply_text(get_text(await get_user_lang(update), 'budget_add_success'), reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    return -1
 
 async def budget_stats_cmd(update, context):
     if not is_premium(update.effective_user.id):
@@ -1014,8 +978,8 @@ async def export_choice(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
         return -1
-    user_id = update.effective_user.id
     choice = update.message.text
+    user_id = update.effective_user.id
     if choice in ["📋 История диалогов", "📋 Chat history"]:
         csv_data = export_chat_history(user_id)
         await update.message.reply_document(document=io.BytesIO(csv_data.encode('utf-8')), filename="chat.csv")
@@ -1035,6 +999,268 @@ async def export_choice(update, context):
         await update.message.reply_text("Назад", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
         return -1
     return -1
+
+# ---------- КАЛЕНДАРЬ (премиум) ----------
+async def add_event_start(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return -1
+    await update.message.reply_text("Дата ГГГГ-ММ-ДД:")
+    return EventState.DATE.value
+
+async def add_event_date(update, context):
+    date_str = update.message.text.strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        await update.message.reply_text("Неверный формат.")
+        return EventState.DATE.value
+    context.user_data["event_date"] = date_str
+    await update.message.reply_text("Время ЧЧ:ММ или - :")
+    return EventState.TIME.value
+
+async def add_event_time(update, context):
+    t = update.message.text.strip()
+    context.user_data["event_time"] = None if t=="-" else t
+    await update.message.reply_text("Название:")
+    return EventState.TITLE.value
+
+async def add_event_title(update, context):
+    context.user_data["event_title"] = update.message.text.strip()
+    await update.message.reply_text("Описание или - :")
+    return EventState.DESCRIPTION.value
+
+async def add_event_description(update, context):
+    desc = update.message.text.strip()
+    context.user_data["event_description"] = None if desc=="-" else desc
+    await update.message.reply_text("Тип: 1-ДР,2-Праздник,3-Встреча,4-Другое,5-ДР другого")
+    return EventState.TYPE.value
+
+async def add_event_type(update, context):
+    choice = update.message.text.strip()
+    type_map = {"1":"birthday","2":"holiday","3":"meeting","4":"other","5":"birthday"}
+    if choice not in type_map:
+        await update.message.reply_text("Выберите 1-5.")
+        return EventState.TYPE.value
+    context.user_data["event_type"] = type_map[choice]
+    if choice=="5":
+        await update.message.reply_text("ID именинника или - :")
+        return EventState.TARGET_USER.value
+    else:
+        context.user_data["target_user_id"] = None
+        await update.message.reply_text("За сколько дней напомнить? (число)")
+        return EventState.REMIND_DAYS.value
+
+async def add_event_target_user(update, context):
+    t = update.message.text.strip()
+    context.user_data["target_user_id"] = None if t=="-" else int(t)
+    await update.message.reply_text("За сколько дней напомнить?")
+    return EventState.REMIND_DAYS.value
+
+async def add_event_remind_days(update, context):
+    days = int(update.message.text.strip()) if update.message.text.strip().isdigit() else 1
+    user_id = update.effective_user.id
+    add_event(
+        user_id=user_id,
+        event_date=context.user_data["event_date"],
+        title=context.user_data["event_title"],
+        description=context.user_data.get("event_description"),
+        event_time=context.user_data.get("event_time"),
+        event_type=context.user_data.get("event_type","other"),
+        remind_before_days=days,
+        target_user_id=context.user_data.get("target_user_id")
+    )
+    await update.message.reply_text("Событие добавлено!", reply_markup=get_premium_keyboard(await get_user_lang(update)))
+    return -1
+
+async def events_list_cmd(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return
+    user_id = update.effective_user.id
+    today = date.today().isoformat()
+    events = get_events_for_user(user_id, from_date=today, limit=20)
+    if not events:
+        await update.message.reply_text("Нет событий.")
+        return
+    lines = ["📅 Ближайшие события:"]
+    for ev in events:
+        lines.append(f"{ev['date']} {ev['time'] or ''}: {ev['title']}")
+    await update.message.reply_text("\n".join(lines))
+
+async def delete_event_cmd(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return
+    if not context.args:
+        await update.message.reply_text("/delete_event <id>")
+        return
+    try:
+        eid = int(context.args[0])
+    except:
+        await update.message.reply_text("ID число.")
+        return
+    if delete_event(eid, update.effective_user.id):
+        await update.message.reply_text("Удалено.")
+    else:
+        await update.message.reply_text("Не найдено.")
+
+# ---------- СЕМЕЙНАЯ ЛЕНТА (премиум) ----------
+async def family_send_cmd(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(lang, 'not_relative'))
+        return
+    if not context.args:
+        await update.message.reply_text("/family_send <текст>")
+        return
+    msg = " ".join(context.args)
+    user_name = context.user_data.get("name") or update.effective_user.first_name
+    add_to_family_feed(family_id, user_id, user_name, msg)
+    await notify_family_members(family_id, user_id, context.bot, f"📢 {user_name}: {msg}")
+    await update.message.reply_text("Отправлено.")
+
+async def family_feed_cmd(update, context):
+    if not is_premium(update.effective_user.id):
+        await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
+        return
+    user_id = update.effective_user.id
+    lang = await get_user_lang(update)
+    family_id = get_family_id_for_user(user_id)
+    if not family_id:
+        await update.message.reply_text(get_text(lang, 'not_relative'))
+        return
+    feed = get_family_feed(family_id, limit=10)
+    if not feed:
+        await update.message.reply_text("📭 В семейной ленте пока нет сообщений.")
+        return
+    lines = ["📋 Семейная лента:"]
+    for entry in feed:
+        lines.append(f"{entry['author_name']} ({entry['created_at'][:16]}): {entry['message']}")
+    await update.message.reply_text("\n".join(lines))
+
+async def notify_family_members(family_id, exclude_user_id, bot, notification):
+    import sqlite3
+    conn = sqlite3.connect("family_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
+    relatives = [r[0] for r in cursor.fetchall()]
+    if family_id != exclude_user_id:
+        relatives.append(family_id)
+    conn.close()
+    for mid in relatives:
+        try:
+            await bot.send_message(mid, notification, parse_mode="Markdown")
+        except:
+            pass
+
+# ---------- ОСТАЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ ----------
+async def help_cmd(update, context):
+    lang = await get_user_lang(update)
+    premium = is_premium(update.effective_user.id)
+    if premium:
+        await update.message.reply_text(
+            "🤖 *Бот-компаньон «Семья»*\n"
+            "/start – регистрация\n"
+            "/menu – главное меню\n"
+            "/add_meds – напоминание о лекарствах\n"
+            "/weather – погода\n"
+            "/games – игры\n"
+            "/premium – информация о премиум\n"
+            "/activate <код> – активировать премиум\n"
+            "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "🤖 *Бот-компаньон «Семья»*\n"
+            "/start – регистрация\n"
+            "/menu – главное меню\n"
+            "/add_meds – напоминание о лекарствах\n"
+            "/weather – погода\n"
+            "/games – игры\n"
+            "/premium – информация о премиум\n"
+            "/activate <код> – активировать премиум",
+            parse_mode="Markdown"
+        )
+
+async def menu_cmd(update, context):
+    lang = await get_user_lang(update)
+    premium = is_premium(update.effective_user.id)
+    await update.message.reply_text("Меню", reply_markup=(get_premium_keyboard(lang) if premium else get_free_keyboard(lang)))
+
+async def set_city(update, context):
+    user_id = update.effective_user.id
+    text = update.message.text.lower()
+    match = re.search(r'(мой город|живу в|город)\s+([а-яА-ЯёЁa-zA-Z\s\-]+)', text)
+    if match:
+        city = match.group(2).strip().capitalize()
+        if len(city) > 1:
+            user = get_user(user_id) or {}
+            upsert_user(user_id, role=user.get("role","senior"), name=user.get("name"), city=city)
+            await update.message.reply_text(f"✅ Запомнила: {city}")
+    else:
+        await update.message.reply_text("Напишите: «Я живу в Москве»")
+
+async def lang_command(update, context):
+    if not context.args:
+        await update.message.reply_text("/lang ru или /lang en")
+        return
+    new = context.args[0].lower()
+    if new not in ['ru','en']:
+        await update.message.reply_text("Поддерживаются ru, en")
+        return
+    set_user_language(update.effective_user.id, new)
+    await update.message.reply_text(f"Язык изменён на {new}")
+
+async def clear_history_cmd(update, context):
+    clear_chat_history(update.effective_user.id)
+    await update.message.reply_text("История диалогов очищена.")
+
+async def companions_cmd(update, context):
+    await update.message.reply_text(social_companions_info())
+async def volunteers_cmd(update, context):
+    await update.message.reply_text(social_volunteers_info())
+async def health_extra_cmd(update, context):
+    await update.message.reply_text(health_extra_info())
+async def helper_cmd(update, context):
+    await update.message.reply_text(home_helper_info())
+async def nostalgia_cmd(update, context):
+    await update.message.reply_text(nostalgia_menu_text())
+async def courses_cmd(update, context):
+    await update.message.reply_text(courses_menu_text())
+async def achievements_cmd(update, context):
+    await update.message.reply_text(achievements_text())
+async def admin_analytics_cmd(update, context):
+    await update.message.reply_text(analytics_info_text())
+async def voice_help(update, context):
+    await update.message.reply_text(voice_interface_info())
+
+# ---------- ЕЖЕДНЕВНЫЕ ЗАДАЧИ ----------
+async def daily_event_reminder(context):
+    today = date.today()
+    for ev in get_events_by_date(today.isoformat()):
+        await context.bot.send_message(ev['user_id'], f"🔔 Напоминание: {ev['title']}")
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    for ev in get_events_by_date(tomorrow):
+        if ev['remind_before_days'] >= 1:
+            await context.bot.send_message(ev['user_id'], f"📅 Завтра событие: {ev['title']}")
+
+async def send_birthday_greetings(context):
+    today = date.today().isoformat()
+    birthdays = get_birthdays_for_date(today)
+    for b in birthdays:
+        uid = b['target_user_id'] if b['target_user_id'] else b['user_id']
+        user_info = get_user(uid)
+        name = user_info['name'] if user_info else f"User_{uid}"
+        await context.bot.send_message(uid, f"🎉 С днём рождения, {name}! 🎂")
+        family_id = get_family_id_for_user(uid)
+        if family_id:
+            add_to_family_feed(family_id, 0, "Бот", f"🎉 Сегодня день рождения {name}!", "birthday")
+            await notify_family_members(family_id, uid, context.bot, f"🎉 Сегодня день рождения {name}!")
 
 # ---------- ПОСТРОЕНИЕ ПРИЛОЖЕНИЯ ----------
 def build_application():
@@ -1074,7 +1300,7 @@ def build_application():
     )
     application.add_handler(conv_handler)
 
-    # Напоминания о лекарствах
+    # Напоминания
     meds_conv = ConversationHandler(
         entry_points=[CommandHandler("add_meds", add_meds_start)],
         states={
@@ -1085,7 +1311,23 @@ def build_application():
     )
     application.add_handler(meds_conv)
 
-    # Медицинский дневник (ConversationHandler – нужно добавить все состояния)
+    # Календарь
+    event_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_event", add_event_start)],
+        states={
+            EventState.DATE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_date)],
+            EventState.TIME.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_time)],
+            EventState.TITLE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_title)],
+            EventState.DESCRIPTION.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_description)],
+            EventState.TYPE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_type)],
+            EventState.TARGET_USER.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_target_user)],
+            EventState.REMIND_DAYS.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_event_remind_days)],
+        },
+        fallbacks=[CommandHandler("cancel", meds_cancel)],
+    )
+    application.add_handler(event_conv)
+
+    # Медицинский дневник
     health_conv = ConversationHandler(
         entry_points=[CommandHandler("health", health_menu)],
         states={
@@ -1103,7 +1345,7 @@ def build_application():
     )
     application.add_handler(health_conv)
 
-    # Бюджет (ConversationHandler)
+    # Бюджет
     budget_conv = ConversationHandler(
         entry_points=[CommandHandler("budget", budget_menu)],
         states={
@@ -1118,7 +1360,7 @@ def build_application():
     )
     application.add_handler(budget_conv)
 
-    # Экспорт (ConversationHandler)
+    # Экспорт
     export_conv = ConversationHandler(
         entry_points=[CommandHandler("export", export_menu)],
         states={ExportState.CHOOSE.value: [MessageHandler(filters.TEXT & ~filters.COMMAND, export_choice)]},
@@ -1134,15 +1376,15 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex("^❌ Выйти$"), exit_game))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game_answer), group=1)
 
-    # Основные команды (бесплатные)
+    # Основные команды
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("enable_checkin", enable_checkin))
     application.add_handler(CommandHandler("disable_checkin", disable_checkin))
+    application.add_handler(CommandHandler("add_relative", add_relative_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("menu", menu_cmd))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("clear_history", clear_history_cmd))
-    application.add_handler(CommandHandler("add_relative", add_relative_cmd))
     application.add_handler(CommandHandler("premium", premium_info))
     application.add_handler(CommandHandler("activate", activate_premium))
     application.add_handler(CommandHandler("gen_code", gen_premium_code))
@@ -1150,7 +1392,6 @@ def build_application():
     # Премиум-команды
     application.add_handler(CommandHandler("family_send", family_send_cmd))
     application.add_handler(CommandHandler("family_feed", family_feed_cmd))
-    application.add_handler(CommandHandler("add_event", add_event_cmd))
     application.add_handler(CommandHandler("events_list", events_list_cmd))
     application.add_handler(CommandHandler("delete_event", delete_event_cmd))
     application.add_handler(CommandHandler("health_stats", health_stats_cmd))
@@ -1159,15 +1400,17 @@ def build_application():
     application.add_handler(CommandHandler("budget_stats", budget_stats_cmd))
     application.add_handler(CommandHandler("budget_list", budget_list_cmd))
     application.add_handler(CommandHandler("budget_categories", budget_categories_cmd))
-    application.add_handler(CommandHandler("export", export_menu))
     application.add_handler(CommandHandler("album", show_album))
 
-    # Дополнительные бесплатные команды
+    # Дополнительные команды
     for cmd in [companions_cmd, volunteers_cmd, health_extra_cmd, helper_cmd, nostalgia_cmd, courses_cmd, achievements_cmd, admin_analytics_cmd, voice_help]:
         application.add_handler(CommandHandler(cmd.__name__.replace("_cmd", ""), cmd))
 
     # Город
     application.add_handler(MessageHandler(filters.Regex(r'(мой город|живу в|город)'), set_city))
+
+    # Голосовые
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
     # Роутер главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
@@ -1176,32 +1419,10 @@ def build_application():
     # JobQueue
     job_queue = application.job_queue
     if job_queue:
-        async def daily_event_reminder(context):
-            today = date.today()
-            for ev in get_events_by_date(today.isoformat()):
-                await context.bot.send_message(ev['user_id'], f"🔔 Напоминание: {ev['title']}")
-            tomorrow = (today + timedelta(days=1)).isoformat()
-            for ev in get_events_by_date(tomorrow):
-                if ev['remind_before_days'] >= 1:
-                    await context.bot.send_message(ev['user_id'], f"📅 Завтра событие: {ev['title']}")
         job_queue.run_daily(daily_event_reminder, time=time(hour=9, minute=0))
         job_queue.run_daily(send_birthday_greetings, time=time(hour=9, minute=5))
 
     return application
-
-# ---------- ЕЖЕДНЕВНАЯ ЗАДАЧА ДНЕЙ РОЖДЕНИЯ ----------
-async def send_birthday_greetings(context):
-    today = date.today().isoformat()
-    birthdays = get_birthdays_for_date(today)
-    for b in birthdays:
-        uid = b['target_user_id'] if b['target_user_id'] else b['user_id']
-        user_info = get_user(uid)
-        name = user_info['name'] if user_info else f"User_{uid}"
-        await context.bot.send_message(uid, f"🎉 С днём рождения, {name}! 🎂")
-        family_id = get_family_id_for_user(uid)
-        if family_id:
-            add_to_family_feed(family_id, 0, "Бот", f"🎉 Сегодня день рождения {name}!", "birthday")
-            await notify_family_members(family_id, uid, context.bot, f"🎉 Сегодня день рождения {name}!")
 
 # ---------- ЗАПУСК ----------
 def run_telegram():
