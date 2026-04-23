@@ -124,7 +124,6 @@ TEXTS = {
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
         'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт. 300₽/мес.",
-        'press_talk': "Нажмите кнопку «💬 Поговорить», чтобы начать диалог.",
     },
     'en': {}
 }
@@ -249,7 +248,7 @@ async def main_menu_router(update, context):
     # Кнопка "Поговорить" включает режим диалога
     if text in ["💬 Поговорить", "💬 Talk"]:
         context.user_data["in_conversation"] = True
-        await handle_talk(update, context)
+        await handle_talk(update, context)   # обрабатываем это же сообщение как начало разговора
         return
 
     # Любая другая кнопка выключает режим диалога
@@ -281,11 +280,15 @@ async def main_menu_router(update, context):
         await budget_menu(update, context)
     elif premium and text in ["📁 Экспорт", "📁 Export"]:
         await export_menu(update, context)
-    # Для любых других текстов (не из меню) ничего не делаем — они пойдут в fallback
+    # Для любых других текстов (не из меню) ничего не делаем – они будут проигнорированы
 
 # ---------- БЕСПЛАТНЫЕ ОБРАБОТЧИКИ ----------
 async def handle_talk(update, context):
-    """Обработчик диалога. Срабатывает либо после кнопки 'Поговорить', либо на любой текст, не обработанный выше."""
+    """Обработчик диалога. Срабатывает только если in_conversation == True."""
+    if not context.user_data.get("in_conversation", False):
+        # Не в режиме диалога – просто игнорируем сообщение, ничего не отвечаем
+        return
+
     user = update.effective_user
     user_id = user.id
     lang = await get_user_lang(update)
@@ -294,12 +297,6 @@ async def handle_talk(update, context):
     if not last_text:
         return
 
-    # Если режим диалога выключен — напоминаем про кнопку и выходим
-    if not context.user_data.get("in_conversation", False):
-        await update.message.reply_text(get_text(lang, 'press_talk'))
-        return
-
-    # Режим диалога включён — отвечаем нейросетью
     save_message(user_id, "user", last_text)
     log_activity(user_id, "talk")
     reply = await generate_companion_reply(last_text, name=name, user_id=user_id)
