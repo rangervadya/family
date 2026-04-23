@@ -263,7 +263,7 @@ async def main_menu_router(update, context):
     elif text in ["🌟 Премиум", "🌟 Premium"]:
         await premium_info(update, context)
     elif text in ["❓ Помощь", "❓ Help"]:
-        await help_cmd(update, context)   # <--- ИСПРАВЛЕНО: кнопка помощи работает
+        await help_cmd(update, context)   # ИСПРАВЛЕНО: кнопка помощи работает
     elif premium and text in ["👥 События", "👥 Events"]:
         await handle_events(update, context)
     elif premium and text in ["🆘 ПОМОЩЬ", "🆘 HELP"]:
@@ -1189,31 +1189,31 @@ async def help_cmd(update, context):
     """Команда /help и кнопка «Помощь»."""
     lang = await get_user_lang(update)
     premium = is_premium(update.effective_user.id)
+    # Используем HTML, чтобы избежать проблем с Markdown
     if premium:
         text = (
-            "🤖 *Бот-компаньон «Семья»*\n"
+            "<b>🤖 Бот-компаньон «Семья»</b>\n"
             "/start – регистрация\n"
             "/menu – главное меню\n"
             "/add_meds – напоминание о лекарствах\n"
             "/weather – погода\n"
             "/games – игры\n"
             "/premium – информация о премиум\n"
-            "/activate <код> – активировать премиум\n"
+            "/activate &lt;код&gt; – активировать премиум\n"
             "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
         )
     else:
         text = (
-            "🤖 *Бот-компаньон «Семья»*\n"
+            "<b>🤖 Бот-компаньон «Семья»</b>\n"
             "/start – регистрация\n"
             "/menu – главное меню\n"
             "/add_meds – напоминание о лекарствах\n"
             "/weather – погода\n"
             "/games – игры\n"
             "/premium – информация о премиум\n"
-            "/activate <код> – активировать премиум"
+            "/activate &lt;код&gt; – активировать премиум"
         )
-    await update.message.reply_text(text, parse_mode="Markdown")
-    # Сброс диалога не требуется, но для чистоты можно сбросить
+    await update.message.reply_text(text, parse_mode="HTML")
     context.user_data["in_conversation"] = False
 
 async def menu_cmd(update, context):
