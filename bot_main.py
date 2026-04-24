@@ -598,7 +598,7 @@ async def handle_voice(update, context):
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка обработки голоса.")
 
-# ---------- ПРЕМИУМ И ОПЛАТА (ИСПРАВЛЕНО С provider_token="") ----------
+# ---------- ПРЕМИУМ И ОПЛАТА (ИСПРАВЛЕНО - ДОБАВЛЕН provider_token) ----------
 async def premium_info(update, context):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -629,12 +629,13 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
+        # ВАЖНО: provider_token должен быть пустой строкой для Stars
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
             description=description,
             payload=payload,
-            provider_token="",           # ОБЯЗАТЕЛЬНО для вашей версии библиотеки
+            provider_token="",  # ОБЯЗАТЕЛЬНЫЙ ПАРАМЕТР, ДАЖЕ ДЛЯ STARS
             currency="XTR",
             prices=[LabeledPrice(label="XTR", amount=price_stars)],
             start_parameter="premium_payment",
@@ -644,23 +645,22 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             need_shipping_address=False,
             is_flexible=False
         )
-        logger.info(f"Инвойс отправлен пользователю {chat_id}")
     except Exception as e:
         logger.error(f"Ошибка при отправке инвойса: {e}")
         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при создании счёта. Попробуйте позже.")
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    logger.info(f"pre_checkout_query получен от {query.from_user.id}, payload={query.invoice_payload}")
+    logger.info(f"Получен pre_checkout_query от {query.from_user.id} с payload={query.invoice_payload}")
     try:
         if query.invoice_payload != "premium_30days":
-            await query.answer(ok=False, error_message="Некорректные данные.")
+            await query.answer(ok=False, error_message="Некорректные данные. Попробуйте ещё раз.")
             return
         await query.answer(ok=True)
-        logger.info(f"pre_checkout_query подтверждён для {query.from_user.id}")
+        logger.info(f"Pre-checkout для {query.from_user.id} успешно подтверждён")
     except Exception as e:
         logger.error(f"Ошибка в pre_checkout_callback: {e}")
-        await query.answer(ok=False, error_message="Ошибка. Попробуйте позже.")
+        await query.answer(ok=False, error_message="Внутренняя ошибка бота. Попробуйте позже.")
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -668,7 +668,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     total_amount = payment.total_amount
     payload = payment.invoice_payload
 
-    logger.info(f"Успешная оплата от {user_id}: {total_amount} Stars, payload={payload}")
+    logger.info(f"Успешный платёж от {user_id}: {total_amount} Stars, payload={payload}")
 
     if payload == "premium_30days":
         add_premium_user(user_id, days=30)
