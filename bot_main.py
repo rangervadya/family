@@ -18,9 +18,10 @@ from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler,
-    ContextTypes, filters, CallbackQueryHandler, PreCheckoutQueryHandler
+    ContextTypes, JobQueue, filters, CallbackQueryHandler, PreCheckoutQueryHandler
 )
 from telegram.request import HTTPXRequest
+from telegram.error import Conflict
 
 from bot_config import get_settings
 from ai_stubs import generate_companion_reply
@@ -99,7 +100,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# ---------- КОДЫ ПРИВЯЗКИ ----------
+# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ ----------
 def init_family_codes_table():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -138,7 +139,7 @@ def delete_family_code(code: str):
     conn.commit()
     conn.close()
 
-# ---------- ТЕКСТЫ ----------
+# ---------- МНОГОЯЗЫЧНОСТЬ ----------
 TEXTS = {
     'ru': {
         'start': "Здравствуйте! Я бот-компаньон «Семья». Давайте познакомимся.\nКто вы?\n➤ Я пожилой пользователь\n➤ Я родственник/опекун",
@@ -163,7 +164,7 @@ TEXTS = {
         'premium_active': "Активен до {date}",
         'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 1 Star: нажмите кнопку ниже",
         'invalid_family_code': "❌ Неверный код привязки.",
-        'family_code_created': "✅ Код для привязки родственника: `{code}`\nПередайте его родственнику.",
+        'family_code_created': "✅ Код для привязки родственника: `{code}`\nПередайте его родственнику. Код действителен 7 дней.",
         'only_senior_can_create_code': "Эта команда доступна только пожилым пользователям.",
     },
     'en': {}
@@ -173,14 +174,14 @@ def get_text(lang, key, **kwargs):
     return text.format(**kwargs) if kwargs else text
 
 # ---------- КЛАВИАТУРЫ ----------
-def get_free_keyboard(lang: str):
+def get_free_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
         buttons = [["💬 Talk", "📅 Reminders"], ["🌤️ Weather", "🎮 Games"], ["🌟 Premium", "❓ Help"]]
     else:
         buttons = [["💬 Поговорить", "📅 Напоминания"], ["🌤️ Погода", "🎮 Игры"], ["🌟 Премиум", "❓ Помощь"]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-def get_premium_keyboard(lang: str):
+def get_premium_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
         buttons = [
             ["💬 Talk", "📅 Reminders"], ["👥 Events", "🆘 HELP"],
@@ -197,7 +198,7 @@ def get_premium_keyboard(lang: str):
         ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-def get_games_keyboard(lang: str):
+def get_games_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
         return ReplyKeyboardMarkup([["🔮 Riddle", "📖 Words"], ["✅ Truth or Lie", "❌ Exit"]], resize_keyboard=True)
     else:
@@ -337,7 +338,7 @@ async def main_menu_router(update, context):
     elif premium and text in ["📁 Экспорт", "📁 Export"]:
         await export_menu(update, context)
 
-# ---------- ДИАЛОГ ----------
+# ---------- БЕСПЛАТНЫЕ ОБРАБОТЧИКИ ----------
 async def handle_talk(update, context):
     if not context.user_data.get("in_conversation", False):
         return
@@ -379,7 +380,7 @@ async def weather_command(update, context):
         return
     await update.message.reply_text(f"🌤️ {summary}")
 
-# ---------- НАПОМИНАНИЯ ----------
+# ---------- НАПОМИНАНИЯ О ЛЕКАРСТВАХ ----------
 async def add_meds_start(update, context):
     await update.message.reply_text("Время (ЧЧ:ММ):", reply_markup=ReplyKeyboardRemove())
     return MedsState.ASK_TIME.value
@@ -423,7 +424,7 @@ async def meds_cancel(update, context):
     context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
-# ---------- ОПРОС ----------
+# ---------- ЕЖЕДНЕВНЫЙ ОПРОС ----------
 async def daily_checkin(context):
     await context.bot.send_message(context.job.chat_id, "Как вы себя чувствуете? 🌷")
 
@@ -557,7 +558,7 @@ async def handle_game_answer(update, context):
             await update.message.reply_text(f"🎉 Я не могу найти слово на букву '{new_last}'! Вы победили!")
             clear_game_state(uid)
 
-# ---------- ГОЛОС ----------
+# ---------- ГОЛОСОВЫЕ СООБЩЕНИЯ ----------
 async def handle_voice(update, context):
     user = update.effective_user
     user_id = user.id
@@ -628,13 +629,13 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
-        # ВАЖНО: provider_token="" обязателен для старых версий библиотеки
+        # Важно: передаём provider_token="" для совместимости со старыми версиями библиотеки
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
             description=description,
             payload=payload,
-            provider_token="",
+            provider_token="",  # обязательно для старых версий python-telegram-bot
             currency="XTR",
             prices=[LabeledPrice(label="XTR", amount=price_stars)],
             start_parameter="premium_payment",
@@ -644,23 +645,24 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             need_shipping_address=False,
             is_flexible=False
         )
-        logger.info(f"Инвойс отправлен пользователю {chat_id}")
+        logger.info(f"Инвойс отправлен пользователю {update.effective_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при отправке инвойса: {e}")
         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при создании счёта. Попробуйте позже.")
 
 async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    logger.info(f"Получен pre_checkout_query от {query.from_user.id}")
+    logger.info(f"✅ Получен pre_checkout_query от {query.from_user.id}")
     try:
         if query.invoice_payload != "premium_30days":
-            await query.answer(ok=False, error_message="Некорректные данные.")
+            await query.answer(ok=False, error_message="Неверный товар")
             return
+        # Здесь можно проверить, не активирован ли уже премиум
         await query.answer(ok=True)
         logger.info(f"Pre-checkout подтверждён для {query.from_user.id}")
     except Exception as e:
         logger.error(f"Ошибка в pre_checkout: {e}")
-        await query.answer(ok=False, error_message="Ошибка бота. Попробуйте позже.")
+        await query.answer(ok=False, error_message="Внутренняя ошибка")
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -668,7 +670,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     total_amount = payment.total_amount
     payload = payment.invoice_payload
 
-    logger.info(f"Успешная оплата от {user_id}: {total_amount} Stars")
+    logger.info(f"💰 Успешный платёж от {user_id}: {total_amount} Stars")
 
     if payload == "premium_30days":
         add_premium_user(user_id, days=30)
@@ -683,7 +685,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
 
     ADMIN_CHAT_ID = 8091619207
     try:
-        await context.bot.send_message(ADMIN_CHAT_ID, f"💰 Пользователь {user_id} оплатил {total_amount} Stars.")
+        await context.bot.send_message(ADMIN_CHAT_ID, f"💰 Пользователь {user_id} оплатил премиум {total_amount} Stars.")
     except:
         pass
 
@@ -774,7 +776,7 @@ async def show_album(update, context):
         else:
             await update.message.reply_video(video=m['file_id'], caption=caption)
 
-# ---------- МЕДИЦИНСКИЙ ДНЕВНИК (сокращённо) ----------
+# ---------- МЕДИЦИНСКИЙ ДНЕВНИК ----------
 async def health_menu(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
@@ -982,7 +984,7 @@ async def health_chart_cmd(update, context):
     except ImportError:
         await update.message.reply_text("⚠️ Для графиков нужна библиотека matplotlib.")
 
-# ---------- БЮДЖЕТ (сокращённо) ----------
+# ---------- БЮДЖЕТ ----------
 async def budget_menu(update, context):
     if not is_premium(update.effective_user.id):
         await update.message.reply_text(get_text(await get_user_lang(update), 'premium_only'))
@@ -1535,7 +1537,7 @@ def build_application():
     application.add_handler(CommandHandler("gen_code", gen_premium_code))
     application.add_handler(CommandHandler("create_family_code", create_family_code_cmd))
 
-    # Платежи (ВАЖНО: порядок регистрации)
+    # Платежи (должны быть выше, чем общие MessageHandler, чтобы перехватывать pre_checkout)
     application.add_handler(CallbackQueryHandler(buy_premium_callback, pattern="buy_premium"))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
@@ -1563,7 +1565,7 @@ def build_application():
     # Голосовые
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    # Роутер главного меню и fallback
+    # Роутер главного меню и fallback (эти обработчики должны быть последними)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_talk), group=3)
 
