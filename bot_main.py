@@ -100,7 +100,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ ----------
+# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ (своя таблица) ----------
 def init_family_codes_table():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -598,7 +598,7 @@ async def handle_voice(update, context):
         logger.error(f"Voice error: {e}")
         await processing.edit_text("❌ Ошибка обработки голоса.")
 
-# ---------- ПРЕМИУМ И ОПЛАТА (ИСПРАВЛЕНО) ----------
+# ---------- ПРЕМИУМ И ОПЛАТА ----------
 async def premium_info(update, context):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -629,13 +629,12 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
-        # Важно: передаём provider_token="" для совместимости со старыми версиями библиотеки
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
             description=description,
             payload=payload,
-            provider_token="",  # обязательно для старых версий python-telegram-bot
+            provider_token="",
             currency="XTR",
             prices=[LabeledPrice(label="XTR", amount=price_stars)],
             start_parameter="premium_payment",
@@ -657,7 +656,6 @@ async def pre_checkout_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if query.invoice_payload != "premium_30days":
             await query.answer(ok=False, error_message="Неверный товар")
             return
-        # Здесь можно проверить, не активирован ли уже премиум
         await query.answer(ok=True)
         logger.info(f"Pre-checkout подтверждён для {query.from_user.id}")
     except Exception as e:
@@ -1537,7 +1535,7 @@ def build_application():
     application.add_handler(CommandHandler("gen_code", gen_premium_code))
     application.add_handler(CommandHandler("create_family_code", create_family_code_cmd))
 
-    # Платежи (должны быть выше, чем общие MessageHandler, чтобы перехватывать pre_checkout)
+    # Платежи
     application.add_handler(CallbackQueryHandler(buy_premium_callback, pattern="buy_premium"))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
@@ -1565,7 +1563,7 @@ def build_application():
     # Голосовые
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    # Роутер главного меню и fallback (эти обработчики должны быть последними)
+    # Роутер главного меню и fallback
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_talk), group=3)
 
@@ -1587,7 +1585,8 @@ def run_telegram():
     async def start_bot():
         await app.initialize()
         await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
+        # КРИТИЧЕСКИ ВАЖНО: добавляем allowed_updates=Update.ALL_TYPES
+        await app.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
         try:
             await asyncio.Event().wait()
         except KeyboardInterrupt:
