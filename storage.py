@@ -13,72 +13,37 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Исправление таблицы users (если колонка называется id)
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-    if cursor.fetchone():
-        cursor.execute("PRAGMA table_info(users)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'user_id' not in columns:
-            cursor.execute("ALTER TABLE users RENAME TO users_old")
-            cursor.execute('''
-                CREATE TABLE users (
-                    user_id INTEGER PRIMARY KEY,
-                    role TEXT,
-                    name TEXT,
-                    age INTEGER,
-                    city TEXT,
-                    interests TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            cursor.execute("SELECT id, role, name, age, city, interests, created_at FROM users_old")
-            rows = cursor.fetchall()
-            cursor.executemany('''
-                INSERT INTO users (user_id, role, name, age, city, interests, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', rows)
-            cursor.execute("DROP TABLE users_old")
-    else:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                role TEXT,
-                name TEXT,
-                age INTEGER,
-                city TEXT,
-                interests TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+    # Таблица users (создаём правильно)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            role TEXT,
+            name TEXT,
+            age INTEGER,
+            city TEXT,
+            interests TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
-    # ПРИНУДИТЕЛЬНОЕ ПЕРЕСОЗДАНИЕ ТАБЛИЦЫ relatives (если она существует, но не имеет senior_id)
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='relatives'")
-    if cursor.fetchone():
-        cursor.execute("PRAGMA table_info(relatives)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'senior_id' not in columns:
-            cursor.execute("DROP TABLE relatives")
-            cursor.execute('''
-                CREATE TABLE relatives (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    senior_id INTEGER NOT NULL,
-                    relative_id INTEGER NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(senior_id, relative_id)
-                )
-            ''')
-    else:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS relatives (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                senior_id INTEGER NOT NULL,
-                relative_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(senior_id, relative_id)
-            )
-        ''')
+    # Таблица relatives: проверяем и добавляем колонки, если их нет
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS relatives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Добавляем колонки, если отсутствуют
+    cursor.execute("PRAGMA table_info(relatives)")
+    existing_cols = [col[1] for col in cursor.fetchall()]
+    if 'senior_id' not in existing_cols:
+        cursor.execute("ALTER TABLE relatives ADD COLUMN senior_id INTEGER")
+    if 'relative_id' not in existing_cols:
+        cursor.execute("ALTER TABLE relatives ADD COLUMN relative_id INTEGER")
+    # Добавляем уникальность, если ещё нет
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_relatives_unique ON relatives (senior_id, relative_id)")
     
-    # Все остальные таблицы (без изменений)
+    # Остальные таблицы (без изменений)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,10 +252,20 @@ def get_activity_summary(user_id, hours=24):
     actions = [r[0] for r in rows]
     return {"talk": actions.count("talk"), "reminder_done": actions.count("reminder_done"), "sos": actions.count("sos")}
 
-# ---------- Привязка родственников ----------
+# ---------- Привязка родственников (с проверкой наличия колонок) ----------
 def add_relative_link(senior_id, relative_id):
     conn = get_db()
     cursor = conn.cursor()
+    # Убеждаемся, что таблица relatives имеет нужные колонки
+    cursor.execute("PRAGMA table_info(relatives)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'senior_id' not in columns:
+        cursor.execute("ALTER TABLE relatives ADD COLUMN senior_id INTEGER")
+    if 'relative_id' not in columns:
+        cursor.execute("ALTER TABLE relatives ADD COLUMN relative_id INTEGER")
+    # Добавляем уникальный индекс, если его нет
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_relatives_unique ON relatives (senior_id, relative_id)")
+    # Вставка
     cursor.execute("INSERT OR IGNORE INTO relatives (senior_id, relative_id) VALUES (?, ?)", (senior_id, relative_id))
     conn.commit()
     conn.close()
@@ -319,7 +294,7 @@ def get_family_id_for_user(user_id):
     conn.close()
     return family_id
 
-# ---------- История чата ----------
+# ---------- Остальные функции (без изменений) ----------
 def init_chat_history_table():
     pass
 
@@ -345,7 +320,6 @@ def get_chat_history(user_id, limit=50):
     conn.close()
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
-# ---------- Семейная лента ----------
 def init_family_feed_table():
     pass
 
@@ -370,7 +344,6 @@ def get_family_feed(family_id, limit=50):
     conn.close()
     return [{"author_name": r[0], "message": r[1], "type": r[2], "created_at": r[3]} for r in rows]
 
-# ---------- Календарь ----------
 def init_calendar_table():
     pass
 
@@ -430,7 +403,6 @@ def get_birthdays_for_date(date_str):
     conn.close()
     return [{"user_id": r[0], "target_user_id": r[1]} for r in rows]
 
-# ---------- Игры ----------
 def init_games_table():
     pass
 
@@ -461,7 +433,6 @@ def clear_game_state(user_id):
     conn.commit()
     conn.close()
 
-# ---------- Медиа ----------
 def init_media_table():
     pass
 
@@ -485,7 +456,6 @@ def get_family_media(family_id, limit=20):
     conn.close()
     return [{"file_id": r[0], "type": r[1], "caption": r[2], "author": r[3], "date": r[4]} for r in rows]
 
-# ---------- Здоровье ----------
 def init_health_table():
     pass
 
@@ -530,7 +500,6 @@ def get_health_stats(user_id, days=30):
         "weight_avg": sum(weight_vals)/len(weight_vals) if weight_vals else 0,
     }
 
-# ---------- Экспорт ----------
 def export_chat_history(user_id):
     conn = get_db()
     cursor = conn.cursor()
@@ -578,7 +547,6 @@ def export_family_feed(family_id):
         writer.writerow([r[3], r[0], r[2], r[1]])
     return output.getvalue()
 
-# ---------- Бюджет ----------
 def init_budget_table():
     pass
 
@@ -632,7 +600,6 @@ def get_category_breakdown(family_id):
     conn.close()
     return {r[0]: r[1] for r in rows}
 
-# ---------- Премиум ----------
 def init_premium_tables():
     pass
 
@@ -687,7 +654,6 @@ def activate_code(code, user_id):
     add_premium_user(user_id, days)
     return True
 
-# ---------- Язык ----------
 def set_user_language(user_id, lang):
     conn = get_db()
     cursor = conn.cursor()
