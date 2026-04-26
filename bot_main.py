@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import os
 import logging
 import sys
@@ -100,7 +99,9 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# ---------- РАБОТА С КОДАМИ ПРИВЯЗКИ (своя таблица) ----------
+# ------------------------------------------------------------
+# РАБОТА С КОДАМИ ПРИВЯЗКИ РОДСТВЕННИКОВ (упрощённо)
+# ------------------------------------------------------------
 def init_family_codes_table():
     conn = sqlite3.connect("family_bot.db")
     cursor = conn.cursor()
@@ -139,7 +140,7 @@ def delete_family_code(code: str):
     conn.commit()
     conn.close()
 
-# ---------- МНОГОЯЗЫЧНОСТЬ ----------
+# ---------- ТЕКСТЫ ----------
 TEXTS = {
     'ru': {
         'start': "Здравствуйте! Я бот-компаньон «Семья». Давайте познакомимся.\nКто вы?\n➤ Я пожилой пользователь\n➤ Я родственник/опекун",
@@ -148,7 +149,7 @@ TEXTS = {
         'senior_age': "Сколько вам лет?",
         'senior_city': "В каком городе вы живёте?",
         'senior_interests': "Расскажите о ваших увлечениях.",
-        'senior_complete': "Спасибо, {name}! Вот главное меню.\nЧтобы создать код для привязки родственника, используйте команду /create_family_code",
+        'senior_complete': "Спасибо, {name}! Вот главное меню.\nЧтобы создать код для привязки родственника, используйте кнопку в меню.",
         'relative_complete': "Спасибо! Вы привязаны к семье. Вот главное меню.",
         'menu': "Главное меню:",
         'no_reminders': "Нет напоминаний. /add_meds",
@@ -164,11 +165,12 @@ TEXTS = {
         'premium_active': "Активен до {date}",
         'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 1 Star: нажмите кнопку ниже",
         'invalid_family_code': "❌ Неверный код привязки.",
-        'family_code_created': "✅ Код для привязки родственника: `{code}`\nПередайте его родственнику. Код действителен 7 дней.",
+        'family_code_created': "✅ Ваш код для привязки родственника: `{code}`\nОтправьте этот код родственнику. Он введёт его при регистрации.",
         'only_senior_can_create_code': "Эта команда доступна только пожилым пользователям.",
     },
     'en': {}
 }
+
 def get_text(lang, key, **kwargs):
     text = TEXTS.get(lang, TEXTS['ru']).get(key, key)
     return text.format(**kwargs) if kwargs else text
@@ -176,9 +178,9 @@ def get_text(lang, key, **kwargs):
 # ---------- КЛАВИАТУРЫ ----------
 def get_free_keyboard(lang: str) -> ReplyKeyboardMarkup:
     if lang == 'en':
-        buttons = [["💬 Talk", "📅 Reminders"], ["🌤️ Weather", "🎮 Games"], ["🌟 Premium", "❓ Help"]]
+        buttons = [["💬 Talk", "📅 Reminders"], ["🌤️ Weather", "🎮 Games"], ["🌟 Premium", "❓ Help"], ["🔑 Get family code"]]
     else:
-        buttons = [["💬 Поговорить", "📅 Напоминания"], ["🌤️ Погода", "🎮 Игры"], ["🌟 Премиум", "❓ Помощь"]]
+        buttons = [["💬 Поговорить", "📅 Напоминания"], ["🌤️ Погода", "🎮 Игры"], ["🌟 Премиум", "❓ Помощь"], ["🔑 Получить код для родственника"]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_premium_keyboard(lang: str) -> ReplyKeyboardMarkup:
@@ -187,14 +189,14 @@ def get_premium_keyboard(lang: str) -> ReplyKeyboardMarkup:
             ["💬 Talk", "📅 Reminders"], ["👥 Events", "🆘 HELP"],
             ["👨‍👩‍👧 Family", "⚙️ Settings"], ["🎮 Games", "🌤️ Weather"],
             ["📸 Album", "🏥 Health"], ["💰 Budget", "📁 Export"],
-            ["🌟 Premium", "❓ Help"]
+            ["🌟 Premium", "❓ Help"], ["🔑 Get family code"]
         ]
     else:
         buttons = [
             ["💬 Поговорить", "📅 Напоминания"], ["👥 События", "🆘 ПОМОЩЬ"],
             ["👨‍👩‍👧 Семья", "⚙️ Настройки"], ["🎮 Игры", "🌤️ Погода"],
             ["📸 Альбом", "🏥 Здоровье"], ["💰 Бюджет", "📁 Экспорт"],
-            ["🌟 Премиум", "❓ Помощь"]
+            ["🌟 Премиум", "❓ Помощь"], ["🔑 Получить код для родственника"]
         ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -287,6 +289,7 @@ async def relative_code(update, context):
     context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
+# ---------- СОЗДАНИЕ КОДА ДЛЯ РОДСТВЕННИКА (через кнопку) ----------
 async def create_family_code_cmd(update, context):
     user_id = update.effective_user.id
     lang = await get_user_lang(update)
@@ -307,6 +310,9 @@ async def main_menu_router(update, context):
     if text in ["💬 Поговорить", "💬 Talk"]:
         context.user_data["in_conversation"] = True
         await handle_talk(update, context)
+        return
+    if text in ["🔑 Получить код для родственника", "🔑 Get family code"]:
+        await create_family_code_cmd(update, context)
         return
 
     context.user_data["in_conversation"] = False
@@ -448,11 +454,10 @@ async def add_relative_cmd(update, context):
         return
     try:
         senior_id = int(context.args[0])
+        add_relative_link(senior_id, update.effective_user.id)
+        await update.message.reply_text("Родственник привязан.")
     except:
         await update.message.reply_text("ID должен быть числом.")
-        return
-    add_relative_link(senior_id, update.effective_user.id)
-    await update.message.reply_text("Родственник привязан.")
 
 # ---------- ИГРЫ ----------
 RIDDLES = [
@@ -629,6 +634,7 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = "Получите все премиум-функции бота на 30 дней."
 
     try:
+        # Важно: provider_token="" для совместимости со старыми версиями
         await context.bot.send_invoice(
             chat_id=chat_id,
             title=title,
@@ -1535,7 +1541,7 @@ def build_application():
     application.add_handler(CommandHandler("gen_code", gen_premium_code))
     application.add_handler(CommandHandler("create_family_code", create_family_code_cmd))
 
-    # Платежи
+    # Платежи (должны быть выше, чем общие MessageHandler)
     application.add_handler(CallbackQueryHandler(buy_premium_callback, pattern="buy_premium"))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout_callback))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
@@ -1563,7 +1569,7 @@ def build_application():
     # Голосовые
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    # Роутер главного меню и fallback
+    # Роутер главного меню и fallback (последними)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_router), group=2)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_talk), group=3)
 
@@ -1585,7 +1591,7 @@ def run_telegram():
     async def start_bot():
         await app.initialize()
         await app.start()
-        # КРИТИЧЕСКИ ВАЖНО: добавляем allowed_updates=Update.ALL_TYPES
+        # КЛЮЧЕВАЯ СТРОКА ДЛЯ ПЛАТЕЖЕЙ
         await app.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
         try:
             await asyncio.Event().wait()
