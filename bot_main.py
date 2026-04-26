@@ -628,7 +628,7 @@ async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         chat_id = update.effective_chat.id
 
-    price_stars = 1
+    price_stars = 170
     payload = "premium_30days"
     title = "Премиум-доступ на 30 дней"
     description = "Получите все премиум-функции бота на 30 дней."
