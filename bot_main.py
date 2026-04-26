@@ -163,7 +163,7 @@ TEXTS = {
         'activate_fail': "❌ Неверный код.",
         'premium_info': "🌟 Премиум-доступ\n\n{status}",
         'premium_active': "Активен до {date}",
-        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 1 Star: нажмите кнопку ниже",
+        'premium_inactive': "Платные функции: семейная лента, календарь, мед. дневник, бюджет, экспорт.\n\nКупить за 170 Star: нажмите кнопку ниже",
         'invalid_family_code': "❌ Неверный код привязки.",
         'family_code_created': "✅ Ваш код для привязки родственника: `{code}`\nОтправьте этот код родственнику. Он введёт его при регистрации.",
         'only_senior_can_create_code': "Эта команда доступна только пожилым пользователям.",
@@ -1330,6 +1330,7 @@ async def help_cmd(update, context):
         "/games – игры\n"
         "/premium – информация о премиум\n"
         "/activate &lt;код&gt; – активировать премиум\n"
+        "📧 Техническая поддержка: rangercompany@yandex.ru"
     )
     if premium:
         text += "Премиум-функции: /family_send, /family_feed, /add_event, /events_list, /health, /budget, /export"
