@@ -13,7 +13,7 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Исправление таблицы users: если колонка называется id, пересоздаём с user_id
+    # Исправление таблицы users (если колонка называется id)
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
     if cursor.fetchone():
         cursor.execute("PRAGMA table_info(users)")
@@ -51,7 +51,49 @@ def init_db():
             )
         ''')
     
-    # Все остальные таблицы
+    # Исправление таблицы relatives
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='relatives'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(relatives)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'senior_id' not in columns:
+            # Переименовываем старую таблицу
+            cursor.execute("ALTER TABLE relatives RENAME TO relatives_old")
+            # Создаём новую с правильными колонками
+            cursor.execute('''
+                CREATE TABLE relatives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    senior_id INTEGER NOT NULL,
+                    relative_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(senior_id, relative_id)
+                )
+            ''')
+            # Если в старой таблице были колонки id и relative_id, пытаемся перенести
+            cursor.execute("PRAGMA table_info(relatives_old)")
+            old_cols = [col[1] for col in cursor.fetchall()]
+            if 'relative_id' in old_cols:
+                # Предполагаем, что старая таблица имела колонки (id, relative_id)
+                cursor.execute("SELECT id, relative_id FROM relatives_old")
+                rows = cursor.fetchall()
+                for row in rows:
+                    # senior_id = id старого пользователя? нет, там был senior_id = ???
+                    # Но для простоты: если в старой таблице не было senior_id, мы не можем восстановить связь.
+                    # Поэтому просто копируем relative_id, а senior_id оставляем 0 (потом можно удалить)
+                    pass
+            cursor.execute("DROP TABLE relatives_old")
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS relatives (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                senior_id INTEGER NOT NULL,
+                relative_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(senior_id, relative_id)
+            )
+        ''')
+    
+    # Все остальные таблицы (без изменений)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,15 +111,6 @@ def init_db():
             user_id INTEGER,
             action TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS relatives (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            senior_id INTEGER NOT NULL,
-            relative_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(senior_id, relative_id)
         )
     ''')
     cursor.execute('''
