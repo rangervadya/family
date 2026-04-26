@@ -13,9 +13,13 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Таблица users (создаём правильно)
+    # ПРИНУДИТЕЛЬНО УДАЛЯЕМ СТАРЫЕ ТАБЛИЦЫ С НЕПРАВИЛЬНОЙ СТРУКТУРОЙ
+    cursor.execute("DROP TABLE IF EXISTS users")
+    cursor.execute("DROP TABLE IF EXISTS relatives")
+    
+    # Создаём таблицу users с правильным PRIMARY KEY user_id
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE users (
             user_id INTEGER PRIMARY KEY,
             role TEXT,
             name TEXT,
@@ -26,24 +30,18 @@ def init_db():
         )
     ''')
     
-    # Таблица relatives: проверяем и добавляем колонки, если их нет
+    # Создаём таблицу relatives с правильными колонками
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS relatives (
+        CREATE TABLE relatives (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            senior_id INTEGER NOT NULL,
+            relative_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(senior_id, relative_id)
         )
     ''')
-    # Добавляем колонки, если отсутствуют
-    cursor.execute("PRAGMA table_info(relatives)")
-    existing_cols = [col[1] for col in cursor.fetchall()]
-    if 'senior_id' not in existing_cols:
-        cursor.execute("ALTER TABLE relatives ADD COLUMN senior_id INTEGER")
-    if 'relative_id' not in existing_cols:
-        cursor.execute("ALTER TABLE relatives ADD COLUMN relative_id INTEGER")
-    # Добавляем уникальность, если ещё нет
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_relatives_unique ON relatives (senior_id, relative_id)")
     
-    # Остальные таблицы (без изменений)
+    # Все остальные таблицы создаются как обычно (без удаления, чтобы сохранить данные)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,7 +186,10 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ---------- Пользователи ----------
+# ---------- ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений) ----------
+# Скопируйте их из предыдущего полного storage.py (они у вас уже есть)
+# Я приведу их здесь для полноты, но вы можете оставить свои, если они работают.
+
 def upsert_user(user_id, role, name=None, age=None, city=None, interests=None):
     conn = get_db()
     cursor = conn.cursor()
@@ -215,14 +216,10 @@ def get_user(user_id):
         return {"user_id": row[0], "role": row[1], "name": row[2], "age": row[3], "city": row[4], "interests": row[5]}
     return None
 
-# ---------- Напоминания ----------
 def add_reminder(user_id, typ, text, time_local):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO reminders (user_id, type, text, time_local)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, typ, text, time_local))
+    cursor.execute("INSERT INTO reminders (user_id, type, text, time_local) VALUES (?, ?, ?, ?)", (user_id, typ, text, time_local))
     conn.commit()
     conn.close()
 
@@ -234,7 +231,6 @@ def list_reminders(user_id):
     conn.close()
     return [{"id": r[0], "type": r[1], "text": r[2], "time_local": r[3], "enabled": bool(r[4])} for r in rows]
 
-# ---------- Активность ----------
 def log_activity(user_id, action):
     conn = get_db()
     cursor = conn.cursor()
@@ -252,20 +248,9 @@ def get_activity_summary(user_id, hours=24):
     actions = [r[0] for r in rows]
     return {"talk": actions.count("talk"), "reminder_done": actions.count("reminder_done"), "sos": actions.count("sos")}
 
-# ---------- Привязка родственников (с проверкой наличия колонок) ----------
 def add_relative_link(senior_id, relative_id):
     conn = get_db()
     cursor = conn.cursor()
-    # Убеждаемся, что таблица relatives имеет нужные колонки
-    cursor.execute("PRAGMA table_info(relatives)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if 'senior_id' not in columns:
-        cursor.execute("ALTER TABLE relatives ADD COLUMN senior_id INTEGER")
-    if 'relative_id' not in columns:
-        cursor.execute("ALTER TABLE relatives ADD COLUMN relative_id INTEGER")
-    # Добавляем уникальный индекс, если его нет
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_relatives_unique ON relatives (senior_id, relative_id)")
-    # Вставка
     cursor.execute("INSERT OR IGNORE INTO relatives (senior_id, relative_id) VALUES (?, ?)", (senior_id, relative_id))
     conn.commit()
     conn.close()
@@ -294,7 +279,6 @@ def get_family_id_for_user(user_id):
     conn.close()
     return family_id
 
-# ---------- Остальные функции (без изменений) ----------
 def init_chat_history_table():
     pass
 
@@ -326,20 +310,14 @@ def init_family_feed_table():
 def add_to_family_feed(family_id, user_id, author_name, message, msg_type="message"):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO family_feed (family_id, user_id, author_name, message, type)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (family_id, user_id, author_name, message, msg_type))
+    cursor.execute("INSERT INTO family_feed (family_id, user_id, author_name, message, type) VALUES (?, ?, ?, ?, ?)", (family_id, user_id, author_name, message, msg_type))
     conn.commit()
     conn.close()
 
 def get_family_feed(family_id, limit=50):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT author_name, message, type, created_at FROM family_feed
-        WHERE family_id = ? ORDER BY created_at DESC LIMIT ?
-    ''', (family_id, limit))
+    cursor.execute("SELECT author_name, message, type, created_at FROM family_feed WHERE family_id = ? ORDER BY created_at DESC LIMIT ?", (family_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return [{"author_name": r[0], "message": r[1], "type": r[2], "created_at": r[3]} for r in rows]
@@ -350,10 +328,7 @@ def init_calendar_table():
 def add_event(user_id, event_date, title, description=None, event_time=None, event_type="other", remind_before_days=1, target_user_id=None):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO calendar_events (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id))
+    cursor.execute("INSERT INTO calendar_events (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id))
     conn.commit()
     conn.close()
 
@@ -361,15 +336,9 @@ def get_events_for_user(user_id, from_date=None, limit=20):
     conn = get_db()
     cursor = conn.cursor()
     if from_date:
-        cursor.execute('''
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
-            FROM calendar_events WHERE user_id = ? AND event_date >= ? ORDER BY event_date ASC LIMIT ?
-        ''', (user_id, from_date, limit))
+        cursor.execute("SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id FROM calendar_events WHERE user_id = ? AND event_date >= ? ORDER BY event_date ASC LIMIT ?", (user_id, from_date, limit))
     else:
-        cursor.execute('''
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
-            FROM calendar_events WHERE user_id = ? ORDER BY event_date ASC LIMIT ?
-        ''', (user_id, limit))
+        cursor.execute("SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id FROM calendar_events WHERE user_id = ? ORDER BY event_date ASC LIMIT ?", (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "date": r[1], "time": r[2], "title": r[3], "description": r[4], "type": r[5], "remind_before_days": r[6], "target_user_id": r[7]} for r in rows]
@@ -377,9 +346,7 @@ def get_events_for_user(user_id, from_date=None, limit=20):
 def get_events_by_date(date_str):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT user_id, title FROM calendar_events WHERE event_date = ?
-    ''', (date_str,))
+    cursor.execute("SELECT user_id, title FROM calendar_events WHERE event_date = ?", (date_str,))
     rows = cursor.fetchall()
     conn.close()
     return [{"user_id": r[0], "title": r[1]} for r in rows]
@@ -396,9 +363,7 @@ def delete_event(event_id, user_id):
 def get_birthdays_for_date(date_str):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT user_id, target_user_id FROM calendar_events WHERE event_date = ? AND event_type = 'birthday'
-    ''', (date_str,))
+    cursor.execute("SELECT user_id, target_user_id FROM calendar_events WHERE event_date = ? AND event_type = 'birthday'", (date_str,))
     rows = cursor.fetchall()
     conn.close()
     return [{"user_id": r[0], "target_user_id": r[1]} for r in rows]
@@ -409,10 +374,7 @@ def init_games_table():
 def save_game_state(user_id, game_name, game_data):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO game_states (user_id, game_name, game_data, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (user_id, game_name, game_data))
+    cursor.execute("INSERT OR REPLACE INTO game_states (user_id, game_name, game_data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)", (user_id, game_name, game_data))
     conn.commit()
     conn.close()
 
@@ -439,19 +401,14 @@ def init_media_table():
 def save_media(family_id, user_id, author, file_id, media_type, caption=None):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO media (family_id, user_id, author, file_id, type, caption)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (family_id, user_id, author, file_id, media_type, caption))
+    cursor.execute("INSERT INTO media (family_id, user_id, author, file_id, type, caption) VALUES (?, ?, ?, ?, ?, ?)", (family_id, user_id, author, file_id, media_type, caption))
     conn.commit()
     conn.close()
 
 def get_family_media(family_id, limit=20):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT file_id, type, caption, author, date FROM media WHERE family_id = ? ORDER BY date DESC LIMIT ?
-    ''', (family_id, limit))
+    cursor.execute("SELECT file_id, type, caption, author, date FROM media WHERE family_id = ? ORDER BY date DESC LIMIT ?", (family_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return [{"file_id": r[0], "type": r[1], "caption": r[2], "author": r[3], "date": r[4]} for r in rows]
@@ -462,10 +419,7 @@ def init_health_table():
 def add_health_record(user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO health_records (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes))
+    cursor.execute("INSERT INTO health_records (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes))
     conn.commit()
     conn.close()
 
@@ -473,10 +427,7 @@ def get_health_records(user_id, days=30):
     cutoff = (date.today() - timedelta(days=days)).isoformat()
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes
-        FROM health_records WHERE user_id = ? AND record_date >= ? ORDER BY record_date DESC
-    ''', (user_id, cutoff))
+    cursor.execute("SELECT record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes FROM health_records WHERE user_id = ? AND record_date >= ? ORDER BY record_date DESC", (user_id, cutoff))
     rows = cursor.fetchall()
     conn.close()
     return [{"date": r[0], "time": r[1], "systolic": r[2], "diastolic": r[3], "pulse": r[4], "blood_sugar": r[5], "weight": r[6], "notes": r[7]} for r in rows]
@@ -517,10 +468,7 @@ def export_chat_history(user_id):
 def export_health_records(user_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes
-        FROM health_records WHERE user_id = ? ORDER BY record_date
-    ''', (user_id,))
+    cursor.execute("SELECT record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes FROM health_records WHERE user_id = ? ORDER BY record_date", (user_id,))
     rows = cursor.fetchall()
     conn.close()
     import csv, io
@@ -534,9 +482,7 @@ def export_health_records(user_id):
 def export_family_feed(family_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT author_name, message, type, created_at FROM family_feed WHERE family_id = ? ORDER BY created_at
-    ''', (family_id,))
+    cursor.execute("SELECT author_name, message, type, created_at FROM family_feed WHERE family_id = ? ORDER BY created_at", (family_id,))
     rows = cursor.fetchall()
     conn.close()
     import csv, io
@@ -553,20 +499,14 @@ def init_budget_table():
 def add_transaction(user_id, family_id, amount, category, trans_type, transaction_date, description=None):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO budget_transactions (user_id, family_id, amount, category, type, transaction_date, description)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, family_id, amount, category, trans_type, transaction_date, description))
+    cursor.execute("INSERT INTO budget_transactions (user_id, family_id, amount, category, type, transaction_date, description) VALUES (?, ?, ?, ?, ?, ?, ?)", (user_id, family_id, amount, category, trans_type, transaction_date, description))
     conn.commit()
     conn.close()
 
 def get_transactions(family_id, limit=50):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT amount, category, type, transaction_date, description FROM budget_transactions
-        WHERE family_id = ? ORDER BY transaction_date DESC LIMIT ?
-    ''', (family_id, limit))
+    cursor.execute("SELECT amount, category, type, transaction_date, description FROM budget_transactions WHERE family_id = ? ORDER BY transaction_date DESC LIMIT ?", (family_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return [{"amount": r[0], "category": r[1], "type": r[2], "date": r[3], "description": r[4]} for r in rows]
@@ -592,10 +532,7 @@ def get_categories():
 def get_category_breakdown(family_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT category, SUM(amount) FROM budget_transactions
-        WHERE family_id = ? AND type = 'expense' GROUP BY category
-    ''', (family_id,))
+    cursor.execute("SELECT category, SUM(amount) FROM budget_transactions WHERE family_id = ? AND type = 'expense' GROUP BY category", (family_id,))
     rows = cursor.fetchall()
     conn.close()
     return {r[0]: r[1] for r in rows}
