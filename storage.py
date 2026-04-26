@@ -45,7 +45,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Привязка родственников (исправлено)
+    # Привязка родственников (исправлено: колонки senior_id и relative_id)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS relatives (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +153,6 @@ def init_db():
             type TEXT
         )
     ''')
-    # Вставим стандартные категории, если их нет
     cursor.execute("SELECT COUNT(*) FROM budget_categories")
     if cursor.fetchone()[0] == 0:
         default_cats = [
@@ -181,7 +180,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Коды привязки семей (дополнительно, чтобы не зависеть от bot_main.py)
+    # Коды привязки семей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS family_codes (
             code TEXT PRIMARY KEY,
@@ -256,7 +255,7 @@ def get_activity_summary(user_id, hours=24):
     actions = [r[0] for r in rows]
     return {"talk": actions.count("talk"), "reminder_done": actions.count("reminder_done"), "sos": actions.count("sos")}
 
-# ---------- Привязка родственников ----------
+# ---------- Привязка родственников (ИСПРАВЛЕНО) ----------
 def add_relative_link(senior_id, relative_id):
     conn = get_db()
     cursor = conn.cursor()
@@ -273,7 +272,6 @@ def get_relatives_for_senior(senior_id):
     return [r[0] for r in rows]
 
 def get_family_id_for_user(user_id):
-    # Семейный ID - это ID старшего пользователя (если пользователь старший, то его ID, если родственник, то senior_id)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT senior_id FROM relatives WHERE relative_id = ?", (user_id,))
@@ -281,7 +279,6 @@ def get_family_id_for_user(user_id):
     if row:
         family_id = row[0]
     else:
-        # Проверим, может сам пользователь является старшим
         cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND role = 'senior'", (user_id,))
         if cursor.fetchone():
             family_id = user_id
@@ -292,7 +289,6 @@ def get_family_id_for_user(user_id):
 
 # ---------- История чата ----------
 def init_chat_history_table():
-    # уже создана выше
     pass
 
 def save_message(user_id, role, content):
@@ -663,6 +659,7 @@ def activate_code(code, user_id):
 def set_user_language(user_id, lang):
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_language (user_id INTEGER PRIMARY KEY, lang TEXT)")
     cursor.execute("INSERT OR REPLACE INTO user_language (user_id, lang) VALUES (?, ?)", (user_id, lang))
     conn.commit()
     conn.close()
@@ -670,6 +667,7 @@ def set_user_language(user_id, lang):
 def get_user_language(user_id):
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_language (user_id INTEGER PRIMARY KEY, lang TEXT)")
     cursor.execute("SELECT lang FROM user_language WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
