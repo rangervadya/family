@@ -12,19 +12,46 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
-    # Пользователи (исправлено: user_id INTEGER PRIMARY KEY)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            role TEXT,
-            name TEXT,
-            age INTEGER,
-            city TEXT,
-            interests TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # Напоминания
+    
+    # Исправление таблицы users: если колонка называется id, пересоздаём с user_id
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'user_id' not in columns:
+            cursor.execute("ALTER TABLE users RENAME TO users_old")
+            cursor.execute('''
+                CREATE TABLE users (
+                    user_id INTEGER PRIMARY KEY,
+                    role TEXT,
+                    name TEXT,
+                    age INTEGER,
+                    city TEXT,
+                    interests TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute("SELECT id, role, name, age, city, interests, created_at FROM users_old")
+            rows = cursor.fetchall()
+            cursor.executemany('''
+                INSERT INTO users (user_id, role, name, age, city, interests, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', rows)
+            cursor.execute("DROP TABLE users_old")
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT,
+                name TEXT,
+                age INTEGER,
+                city TEXT,
+                interests TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    
+    # Все остальные таблицы
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +63,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Активность
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS activity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +71,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Привязка родственников
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS relatives (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +80,6 @@ def init_db():
             UNIQUE(senior_id, relative_id)
         )
     ''')
-    # История чата
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +89,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Семейная лента
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS family_feed (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +100,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Календарь
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +114,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Игры
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS game_states (
             user_id INTEGER PRIMARY KEY,
@@ -101,7 +122,6 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Медиа
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS media (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +134,6 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Здоровье
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS health_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,7 +149,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Бюджет
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS budget_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +162,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Категории бюджета
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS budget_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,7 +179,6 @@ def init_db():
         ]
         for name, icon, typ in default_cats:
             cursor.execute("INSERT INTO budget_categories (name, icon, type) VALUES (?, ?, ?)", (name, icon, typ))
-    # Премиум
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS premium_users (
             user_id INTEGER PRIMARY KEY,
@@ -170,7 +186,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Коды активации премиума
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS premium_codes (
             code TEXT PRIMARY KEY,
@@ -180,7 +195,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Коды привязки семей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS family_codes (
             code TEXT PRIMARY KEY,
@@ -672,31 +686,3 @@ def get_user_language(user_id):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
-
-# ---------- Семейные коды (для привязки) ----------
-def init_family_codes_table():
-    conn = get_db()
-    conn.execute("CREATE TABLE IF NOT EXISTS family_codes (code TEXT PRIMARY KEY, senior_id INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    conn.close()
-
-def generate_family_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-def save_family_code(code, senior_id):
-    conn = get_db()
-    conn.execute("INSERT INTO family_codes (code, senior_id) VALUES (?, ?)", (code, senior_id))
-    conn.commit()
-    conn.close()
-
-def check_family_code(code):
-    conn = get_db()
-    cur = conn.execute("SELECT senior_id FROM family_codes WHERE code=?", (code,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None
-
-def delete_family_code(code):
-    conn = get_db()
-    conn.execute("DELETE FROM family_codes WHERE code=?", (code,))
-    conn.commit()
-    conn.close()
