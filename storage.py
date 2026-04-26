@@ -13,23 +13,47 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Таблица users (с user_id)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            role TEXT,
-            name TEXT,
-            age INTEGER,
-            city TEXT,
-            interests TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    # Исправление таблицы users (если колонка называется id)
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'user_id' not in columns:
+            cursor.execute("ALTER TABLE users RENAME TO users_old")
+            cursor.execute('''
+                CREATE TABLE users (
+                    user_id INTEGER PRIMARY KEY,
+                    role TEXT,
+                    name TEXT,
+                    age INTEGER,
+                    city TEXT,
+                    interests TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute("SELECT id, role, name, age, city, interests, created_at FROM users_old")
+            rows = cursor.fetchall()
+            cursor.executemany('''
+                INSERT INTO users (user_id, role, name, age, city, interests, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', rows)
+            cursor.execute("DROP TABLE users_old")
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT,
+                name TEXT,
+                age INTEGER,
+                city TEXT,
+                interests TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
-    # Таблица relatives - ПРИНУДИТЕЛЬНОЕ УДАЛЕНИЕ И ПЕРЕСОЗДАНИЕ, если нет колонки senior_id
+    # ПРИНУДИТЕЛЬНОЕ ПЕРЕСОЗДАНИЕ ТАБЛИЦЫ relatives (если она существует, но не имеет senior_id)
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='relatives'")
-    table_exists = cursor.fetchone()
-    if table_exists:
+    if cursor.fetchone():
         cursor.execute("PRAGMA table_info(relatives)")
         columns = [col[1] for col in cursor.fetchall()]
         if 'senior_id' not in columns:
@@ -45,7 +69,7 @@ def init_db():
             ''')
     else:
         cursor.execute('''
-            CREATE TABLE relatives (
+            CREATE TABLE IF NOT EXISTS relatives (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 senior_id INTEGER NOT NULL,
                 relative_id INTEGER NOT NULL,
@@ -54,7 +78,7 @@ def init_db():
             )
         ''')
     
-    # Все остальные таблицы
+    # Все остальные таблицы (без изменений)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
