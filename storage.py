@@ -12,7 +12,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
-    # Пользователи
+    # Пользователи (исправлено: user_id INTEGER PRIMARY KEY)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -45,7 +45,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Привязка родственников (исправлено: колонки senior_id и relative_id)
+    # Привязка родственников
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS relatives (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +77,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Календарь событий
+    # Календарь
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +101,7 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Медиа (альбом)
+    # Медиа
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS media (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,7 +255,7 @@ def get_activity_summary(user_id, hours=24):
     actions = [r[0] for r in rows]
     return {"talk": actions.count("talk"), "reminder_done": actions.count("reminder_done"), "sos": actions.count("sos")}
 
-# ---------- Привязка родственников (ИСПРАВЛЕНО) ----------
+# ---------- Привязка родственников ----------
 def add_relative_link(senior_id, relative_id):
     conn = get_db()
     cursor = conn.cursor()
