@@ -1,133 +1,129 @@
 import sqlite3
-import csv
-import io
-from datetime import datetime, timedelta
-import secrets
+import json
+from datetime import datetime, date, timedelta
+import random
+import string
 
-# ---------- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (с миграцией) ----------
+DB_PATH = "family_bot.db"
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
 def init_db():
-    conn = sqlite3.connect("family_bot.db")
+    conn = get_connection()
     cursor = conn.cursor()
     
-    # Таблица users
-    cursor.execute("""
+    # Таблица пользователей
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
+            role TEXT,
             name TEXT,
             age INTEGER,
             city TEXT,
             interests TEXT,
-            role TEXT DEFAULT 'senior'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    # Добавляем колонку language, если её нет
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if 'language' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
+    ''')
     
-    # Остальные таблицы (без изменений)
-    cursor.execute("""
+    # Таблица родственников (исправленная)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS relatives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            senior_id INTEGER NOT NULL,
+            relative_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(senior_id, relative_id)
+        )
+    ''')
+    
+    # Таблица напоминаний
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
-            kind TEXT,
+            user_id INTEGER NOT NULL,
+            type TEXT,
             text TEXT,
             time_local TEXT,
             enabled INTEGER DEFAULT 1
         )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activities (
+    ''')
+    
+    # Таблица активности
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS activity (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
+            user_id INTEGER NOT NULL,
             action TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS relatives (
-            senior_id INTEGER,
-            relative_id INTEGER,
-            PRIMARY KEY (senior_id, relative_id)
-        )
-    """)
-    cursor.execute("""
+    ''')
+    
+    # Остальные таблицы (история чатов, лента, календарь, игры, медиа, здоровье, бюджет, премиум)
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            role TEXT,
+            content TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS family_feed (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             family_id INTEGER NOT NULL,
-            author_id INTEGER NOT NULL,
+            author_id INTEGER,
             author_name TEXT,
-            message TEXT NOT NULL,
-            message_type TEXT DEFAULT 'text',
+            message TEXT,
+            type TEXT DEFAULT 'message',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_family_id ON family_feed(family_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_feed_created_at ON family_feed(created_at)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS calendar_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            target_user_id INTEGER,
-            event_date TEXT NOT NULL,
+            event_date TEXT,
             event_time TEXT,
-            title TEXT NOT NULL,
+            title TEXT,
             description TEXT,
-            event_type TEXT DEFAULT 'other',
+            event_type TEXT,
             remind_before_days INTEGER DEFAULT 1,
+            target_user_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("PRAGMA table_info(calendar_events)")
-    cols = [c[1] for c in cursor.fetchall()]
-    if 'target_user_id' not in cols:
-        cursor.execute("ALTER TABLE calendar_events ADD COLUMN target_user_id INTEGER")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_user_id ON calendar_events(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(event_date)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS games_state (
             user_id INTEGER PRIMARY KEY,
             game_name TEXT,
             game_data TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+    ''')
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS media_albums (
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS media (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             family_id INTEGER NOT NULL,
-            author_id INTEGER NOT NULL,
+            author_id INTEGER,
             author_name TEXT,
-            file_type TEXT NOT NULL,
-            file_id TEXT NOT NULL,
+            file_id TEXT,
+            type TEXT,
             caption TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_family_id ON media_albums(family_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_created_at ON media_albums(created_at)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS health_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            record_date TEXT NOT NULL,
+            record_date TEXT,
             record_time TEXT,
             systolic INTEGER,
             diastolic INTEGER,
@@ -137,343 +133,310 @@ def init_db():
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS budget_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             family_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            category TEXT NOT NULL,
-            type TEXT NOT NULL,
-            transaction_date TEXT NOT NULL,
+            amount REAL,
+            category TEXT,
+            type TEXT,
+            transaction_date TEXT,
             description TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_family_date ON budget_transactions(family_id, transaction_date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_user ON budget_transactions(user_id)")
+    ''')
     
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS budget_categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            type TEXT NOT NULL,
+            name TEXT PRIMARY KEY,
+            type TEXT,
             icon TEXT
         )
-    """)
-    cursor.execute("SELECT COUNT(*) FROM budget_categories")
-    if cursor.fetchone()[0] == 0:
-        default_categories = [
-            ("Зарплата", "income", "💰"), ("Пенсия", "income", "🏦"), ("Подарок", "income", "🎁"),
-            ("Продукты", "expense", "🍎"), ("Лекарства", "expense", "💊"), ("Коммунальные услуги", "expense", "🏠"),
-            ("Транспорт", "expense", "🚗"), ("Развлечения", "expense", "🎬"), ("Одежда", "expense", "👕"),
-            ("Здоровье", "expense", "🏥"), ("Другое", "expense", "📦")
-        ]
-        for name, typ, icon in default_categories:
-            cursor.execute("INSERT INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", (name, typ, icon))
+    ''')
     
-    cursor.execute("""
+    # Добавим стандартные категории, если их нет
+    default_categories = [
+        ('Зарплата', 'income', '💰'), ('Подарок', 'income', '🎁'), ('Возврат долга', 'income', '↩️'),
+        ('Продукты', 'expense', '🍎'), ('Транспорт', 'expense', '🚗'), ('ЖКХ', 'expense', '🏠'), ('Здоровье', 'expense', '💊'),
+        ('Развлечения', 'expense', '🎬'), ('Одежда', 'expense', '👕'), ('Прочее', 'expense', '📌')
+    ]
+    for cat in default_categories:
+        cursor.execute("INSERT OR IGNORE INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", cat)
+    
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS premium_users (
             user_id INTEGER PRIMARY KEY,
-            expires_at TIMESTAMP NOT NULL,
+            expiry_date TEXT,
             activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
+    ''')
+    
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS premium_codes (
             code TEXT PRIMARY KEY,
-            days INTEGER NOT NULL,
+            days INTEGER,
+            used INTEGER DEFAULT 0,
             used_by INTEGER,
-            used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+    ''')
     
     conn.commit()
     conn.close()
 
-# ---------- ФУНКЦИИ ИНИЦИАЛИЗАЦИИ ОТДЕЛЬНЫХ ТАБЛИЦ (для совместимости) ----------
-def init_chat_history_table():
-    init_db()  # или можно просто вызвать init_db, он уже создаст таблицы
-def init_family_feed_table():
-    init_db()
-def init_calendar_table():
-    init_db()
-def init_games_table():
-    init_db()
-def init_media_table():
-    init_db()
-def init_health_table():
-    init_db()
-def init_budget_table():
-    init_db()
-def init_premium_tables():
-    init_db()
-
-# ---------- ПОЛЬЗОВАТЕЛИ ----------
-def upsert_user(telegram_id, role, name=None, age=None, city=None, interests=None):
-    conn = sqlite3.connect("family_bot.db")
+# ---------- РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ----------
+def upsert_user(user_id, role, name=None, age=None, city=None, interests=None):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO users (telegram_id, name, age, city, interests, role)
+    cursor.execute('''
+        INSERT INTO users (user_id, role, name, age, city, interests)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (telegram_id, name, age, city, interests, role))
+        ON CONFLICT(user_id) DO UPDATE SET
+            role = excluded.role,
+            name = COALESCE(excluded.name, name),
+            age = COALESCE(excluded.age, age),
+            city = COALESCE(excluded.city, city),
+            interests = COALESCE(excluded.interests, interests)
+    ''', (user_id, role, name, age, city, interests))
     conn.commit()
     conn.close()
 
-def get_user(telegram_id):
-    conn = sqlite3.connect("family_bot.db")
+def get_user(user_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT name, age, city, interests, role FROM users WHERE telegram_id = ?", (telegram_id,))
+    cursor.execute("SELECT user_id, role, name, age, city, interests FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {"name": row[0], "age": row[1], "city": row[2], "interests": row[3], "role": row[4]}
+        return {"user_id": row[0], "role": row[1], "name": row[2], "age": row[3], "city": row[4], "interests": row[5]}
     return None
 
-def set_user_language(telegram_id, lang):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET language = ? WHERE telegram_id = ?", (lang, telegram_id))
-    conn.commit()
-    conn.close()
-
-def get_user_language(telegram_id):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT language FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 'ru'
-
-# ---------- НАПОМИНАНИЯ ----------
-def add_reminder(telegram_id, kind, text, time_local):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO reminders (telegram_id, kind, text, time_local) VALUES (?, ?, ?, ?)",
-                   (telegram_id, kind, text, time_local))
-    conn.commit()
-    conn.close()
-
-def list_reminders(telegram_id):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, kind, text, time_local, enabled FROM reminders WHERE telegram_id = ?", (telegram_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "kind": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
-
-# ---------- АКТИВНОСТИ ----------
-def log_activity(telegram_id, action):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO activities (telegram_id, action) VALUES (?, ?)", (telegram_id, action))
-    conn.commit()
-    conn.close()
-
-def get_activity_summary(telegram_id):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'talk' AND created_at > datetime('now', '-1 day')", (telegram_id,))
-    talk = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'reminder_done' AND created_at > datetime('now', '-1 day')", (telegram_id,))
-    reminder_done = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM activities WHERE telegram_id = ? AND action = 'sos' AND created_at > datetime('now', '-1 day')", (telegram_id,))
-    sos = cursor.fetchone()[0]
-    conn.close()
-    return {"talk": talk, "reminder_done": reminder_done, "sos": sos}
-
 # ---------- РОДСТВЕННИКИ ----------
-def add_relative_link(senior_telegram_id, relative_telegram_id):
-    conn = sqlite3.connect("family_bot.db")
+def add_relative_link(senior_id, relative_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO relatives (senior_id, relative_id) VALUES (?, ?)", 
-                   (senior_telegram_id, relative_telegram_id))
+    cursor.execute("INSERT OR IGNORE INTO relatives (senior_id, relative_id) VALUES (?, ?)", (senior_id, relative_id))
     conn.commit()
     conn.close()
 
-def get_relatives_for_senior(senior_telegram_id):
-    conn = sqlite3.connect("family_bot.db")
+def get_relatives_for_senior(senior_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (senior_telegram_id,))
+    cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (senior_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [r[0] for r in rows]
+    return [row[0] for row in rows]
 
-# ---------- ИСТОРИЯ ДИАЛОГОВ ----------
-def save_message(user_id: int, role: str, message: str):
-    conn = sqlite3.connect("family_bot.db")
+def get_family_id_for_user(user_id):
+    # Проверяем, является ли пользователь старшим
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO chat_history (user_id, role, message) VALUES (?, ?, ?)", (user_id, role, message))
-    conn.commit()
-    conn.close()
-
-def get_chat_history(user_id: int, limit: int = 10) -> list:
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT role, message FROM chat_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
-    rows = cursor.fetchall()
-    conn.close()
-    history = [{"role": row[0], "content": row[1]} for row in reversed(rows)]
-    return history
-
-def clear_chat_history(user_id: int):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-# ---------- СЕМЕЙНАЯ ЛЕНТА ----------
-def get_family_id_for_user(user_id: int) -> int:
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT role FROM users WHERE telegram_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row and row[0] == "senior":
-        conn.close()
-        return user_id
     cursor.execute("SELECT senior_id FROM relatives WHERE relative_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
-        return row[0]
+        return row[0]  # family_id = senior_id
+    # Если нет, то он может быть старшим
+    user = get_user(user_id)
+    if user and user.get('role') == 'senior':
+        return user_id
     return None
 
-def add_to_family_feed(family_id: int, author_id: int, author_name: str, message: str, message_type: str = "text"):
-    conn = sqlite3.connect("family_bot.db")
+# ---------- НАПОМИНАНИЯ ----------
+def add_reminder(user_id, type_, text, time_local):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO family_feed (family_id, author_id, author_name, message, message_type)
-        VALUES (?, ?, ?, ?, ?)
-    """, (family_id, author_id, author_name, message, message_type))
+    cursor.execute("INSERT INTO reminders (user_id, type, text, time_local) VALUES (?, ?, ?, ?)",
+                   (user_id, type_, text, time_local))
     conn.commit()
     conn.close()
 
-def get_family_feed(family_id: int, limit: int = 20) -> list:
-    conn = sqlite3.connect("family_bot.db")
+def list_reminders(user_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT author_name, message, message_type, created_at
-        FROM family_feed
-        WHERE family_id = ?
-        ORDER BY created_at DESC LIMIT ?
-    """, (family_id, limit))
+    cursor.execute("SELECT id, type, text, time_local, enabled FROM reminders WHERE user_id = ? ORDER BY time_local", (user_id,))
     rows = cursor.fetchall()
     conn.close()
-    feed = []
-    for row in reversed(rows):
-        feed.append({
-            "author_name": row[0],
-            "message": row[1],
-            "message_type": row[2],
-            "created_at": row[3]
-        })
-    return feed
+    return [{"id": r[0], "type": r[1], "text": r[2], "time_local": r[3], "enabled": r[4]} for r in rows]
+
+# ---------- АКТИВНОСТЬ ----------
+def log_activity(user_id, action):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO activity (user_id, action) VALUES (?, ?)", (user_id, action))
+    conn.commit()
+    conn.close()
+
+def get_activity_summary(user_id, hours=24):
+    since = datetime.now() - timedelta(hours=hours)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT action, COUNT(*) FROM activity WHERE user_id = ? AND created_at > ? GROUP BY action", (user_id, since))
+    rows = cursor.fetchall()
+    conn.close()
+    summary = {"talk": 0, "reminder_done": 0, "sos": 0}
+    for action, count in rows:
+        if action in summary:
+            summary[action] = count
+    return summary
+
+# ---------- ИСТОРИЯ ЧАТОВ ----------
+def init_chat_history_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        role TEXT,
+        content TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.close()
+
+def save_message(user_id, role, content):
+    conn = get_connection()
+    conn.execute("INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)", (user_id, role, content))
+    conn.commit()
+    conn.close()
+
+def clear_chat_history(user_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def export_chat_history(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT timestamp, role, content FROM chat_history WHERE user_id = ? ORDER BY timestamp", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    import io
+    output = io.StringIO()
+    output.write("timestamp,role,content\n")
+    for row in rows:
+        output.write(f"{row[0]},{row[1]},{row[2]}\n")
+    return output.getvalue()
+
+# ---------- СЕМЕЙНАЯ ЛЕНТА ----------
+def init_family_feed_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS family_feed (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id INTEGER NOT NULL,
+        author_id INTEGER,
+        author_name TEXT,
+        message TEXT,
+        type TEXT DEFAULT 'message',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.close()
+
+def add_to_family_feed(family_id, author_id, author_name, message, type_="message"):
+    conn = get_connection()
+    conn.execute("INSERT INTO family_feed (family_id, author_id, author_name, message, type) VALUES (?, ?, ?, ?, ?)",
+                 (family_id, author_id, author_name, message, type_))
+    conn.commit()
+    conn.close()
+
+def get_family_feed(family_id, limit=50):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT author_name, message, created_at FROM family_feed WHERE family_id = ? ORDER BY created_at DESC LIMIT ?", (family_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"author_name": r[0], "message": r[1], "created_at": r[2]} for r in rows]
+
+def export_family_feed(family_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT created_at, author_name, message FROM family_feed WHERE family_id = ? ORDER BY created_at", (family_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    import io
+    output = io.StringIO()
+    output.write("timestamp,author,message\n")
+    for row in rows:
+        output.write(f"{row[0]},{row[1]},{row[2]}\n")
+    return output.getvalue()
 
 # ---------- КАЛЕНДАРЬ ----------
-def add_event(user_id: int, event_date: str, title: str, description: str = None,
-              event_time: str = None, event_type: str = "other", remind_before_days: int = 1,
-              target_user_id: int = None) -> int:
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO calendar_events (user_id, target_user_id, event_date, event_time, title, description, event_type, remind_before_days)
+def init_calendar_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS calendar_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        event_date TEXT,
+        event_time TEXT,
+        title TEXT,
+        description TEXT,
+        event_type TEXT,
+        remind_before_days INTEGER DEFAULT 1,
+        target_user_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.close()
+
+def add_event(user_id, event_date, title, description=None, event_time=None, event_type="other", remind_before_days=1, target_user_id=None):
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO calendar_events (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, target_user_id, event_date, event_time, title, description, event_type, remind_before_days))
-    event_id = cursor.lastrowid
+    """, (user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id))
     conn.commit()
     conn.close()
-    return event_id
 
-def get_events_for_user(user_id: int, from_date: str = None, limit: int = 50) -> list:
-    conn = sqlite3.connect("family_bot.db")
+def get_events_for_user(user_id, from_date=None, limit=50):
+    conn = get_connection()
     cursor = conn.cursor()
     if from_date:
-        cursor.execute("""
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
-            FROM calendar_events
-            WHERE user_id = ? AND event_date >= ?
-            ORDER BY event_date ASC, event_time ASC
-            LIMIT ?
-        """, (user_id, from_date, limit))
+        cursor.execute("SELECT id, event_date, event_time, title, description, event_type, remind_before_days FROM calendar_events WHERE user_id = ? AND event_date >= ? ORDER BY event_date LIMIT ?", (user_id, from_date, limit))
     else:
-        cursor.execute("""
-            SELECT id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
-            FROM calendar_events
-            WHERE user_id = ?
-            ORDER BY event_date ASC, event_time ASC
-            LIMIT ?
-        """, (user_id, limit))
+        cursor.execute("SELECT id, event_date, event_time, title, description, event_type, remind_before_days FROM calendar_events WHERE user_id = ? ORDER BY event_date LIMIT ?", (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "id": r[0], "date": r[1], "time": r[2], "title": r[3], "description": r[4],
-        "type": r[5], "remind_before_days": r[6], "target_user_id": r[7]
-    } for r in rows]
+    return [{"id": r[0], "date": r[1], "time": r[2], "title": r[3], "description": r[4], "type": r[5], "remind_before_days": r[6]} for r in rows]
 
-def delete_event(event_id: int, user_id: int) -> bool:
-    conn = sqlite3.connect("family_bot.db")
+def get_events_by_date(date_str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, user_id, title, remind_before_days FROM calendar_events WHERE event_date = ?", (date_str,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": r[0], "user_id": r[1], "title": r[2], "remind_before_days": r[3]} for r in rows]
+
+def delete_event(event_id, user_id):
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM calendar_events WHERE id = ? AND user_id = ?", (event_id, user_id))
-    deleted = cursor.rowcount > 0
     conn.commit()
     conn.close()
-    return deleted
+    return cursor.rowcount > 0
 
-def get_events_by_date(target_date: str) -> list:
-    conn = sqlite3.connect("family_bot.db")
+def get_birthdays_for_date(date_str):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, user_id, event_date, event_time, title, description, event_type, remind_before_days, target_user_id
-        FROM calendar_events
-        WHERE event_date = ?
-    """, (target_date,))
+    cursor.execute("SELECT id, user_id, target_user_id, title FROM calendar_events WHERE event_type = 'birthday' AND event_date = ?", (date_str,))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "id": r[0], "user_id": r[1], "date": r[2], "time": r[3], "title": r[4], "description": r[5],
-        "type": r[6], "remind_before_days": r[7], "target_user_id": r[8]
-    } for r in rows]
-
-def get_birthdays_for_date(target_date: str, family_id: int = None) -> list:
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    if family_id:
-        cursor.execute("SELECT relative_id FROM relatives WHERE senior_id = ?", (family_id,))
-        relatives = [row[0] for row in cursor.fetchall()]
-        relatives.append(family_id)
-        placeholders = ','.join('?' for _ in relatives)
-        query = f"""
-            SELECT id, user_id, target_user_id, title, description
-            FROM calendar_events
-            WHERE event_date = ? AND event_type = 'birthday' AND user_id IN ({placeholders})
-        """
-        cursor.execute(query, (target_date, *relatives))
-    else:
-        cursor.execute("""
-            SELECT id, user_id, target_user_id, title, description
-            FROM calendar_events
-            WHERE event_date = ? AND event_type = 'birthday'
-        """, (target_date,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "user_id": r[1], "target_user_id": r[2], "title": r[3], "description": r[4]} for r in rows]
+    return [{"id": r[0], "user_id": r[1], "target_user_id": r[2], "title": r[3]} for r in rows]
 
 # ---------- ИГРЫ ----------
-def save_game_state(user_id: int, game_name: str, game_data: str):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO games_state (user_id, game_name, game_data) VALUES (?, ?, ?)",
-                   (user_id, game_name, game_data))
+def init_games_table():
+    conn = get_connection()
+    conn.execute("CREATE TABLE IF NOT EXISTS games_state (user_id INTEGER PRIMARY KEY, game_name TEXT, game_data TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.close()
+
+def save_game_state(user_id, game_name, game_data):
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO games_state (user_id, game_name, game_data) VALUES (?, ?, ?)", (user_id, game_name, game_data))
     conn.commit()
     conn.close()
 
-def get_game_state(user_id: int):
-    conn = sqlite3.connect("family_bot.db")
+def get_game_state(user_id):
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT game_name, game_data FROM games_state WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -482,48 +445,82 @@ def get_game_state(user_id: int):
         return {"game_name": row[0], "game_data": row[1]}
     return None
 
-def clear_game_state(user_id: int):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM games_state WHERE user_id = ?", (user_id,))
+def clear_game_state(user_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM games_state WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
 # ---------- МЕДИА ----------
-def save_media(family_id: int, author_id: int, author_name: str, file_type: str, file_id: str, caption: str = None):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO media_albums (family_id, author_id, author_name, file_type, file_id, caption)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (family_id, author_id, author_name, file_type, file_id, caption))
+def init_media_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS media (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id INTEGER NOT NULL,
+        author_id INTEGER,
+        author_name TEXT,
+        file_id TEXT,
+        type TEXT,
+        caption TEXT,
+        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.close()
+
+def save_media(family_id, author_id, author_name, file_id, type_, caption=None):
+    conn = get_connection()
+    conn.execute("INSERT INTO media (family_id, author_id, author_name, file_id, type, caption) VALUES (?, ?, ?, ?, ?, ?)",
+                 (family_id, author_id, author_name, file_id, type_, caption))
     conn.commit()
     conn.close()
 
-def get_family_media(family_id: int, limit: int = 20) -> list:
-    conn = sqlite3.connect("family_bot.db")
+def get_family_media(family_id, limit=50):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, author_name, file_type, file_id, caption, created_at
-        FROM media_albums
-        WHERE family_id = ?
-        ORDER BY created_at DESC LIMIT ?
-    """, (family_id, limit))
+    cursor.execute("SELECT file_id, type, caption, date, author_name FROM media WHERE family_id = ? ORDER BY date DESC LIMIT ?", (family_id, limit))
     rows = cursor.fetchall()
     conn.close()
-    media_list = []
-    for row in reversed(rows):
-        media_list.append({
-            "id": row[0], "author": row[1], "type": row[2], "file_id": row[3], "caption": row[4], "date": row[5]
-        })
-    return media_list
+    return [{"file_id": r[0], "type": r[1], "caption": r[2], "date": r[3], "author": r[4]} for r in rows]
 
-# ---------- МЕДИЦИНСКИЙ ДНЕВНИК ----------
-def add_health_record(user_id, record_date, systolic=None, diastolic=None, pulse=None,
-                      blood_sugar=None, weight=None, notes=None, record_time=None):
-    conn = sqlite3.connect("family_bot.db")
+# ---------- ЯЗЫК ----------
+def set_user_language(user_id, lang):
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO users (user_id, role, name, age, city, interests) VALUES (?, ?, ?, ?, ?, ?)",
+                 (user_id, None, None, None, None, None))
+    # Для языка нужна отдельная таблица или поле. Создадим поле language в users
+    conn.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
+    conn.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_language(user_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 'ru'
+
+# ---------- ЗДОРОВЬЕ ----------
+def init_health_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS health_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        record_date TEXT,
+        record_time TEXT,
+        systolic INTEGER,
+        diastolic INTEGER,
+        pulse INTEGER,
+        blood_sugar REAL,
+        weight REAL,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.close()
+
+def add_health_record(user_id, record_date, record_time=None, systolic=None, diastolic=None, pulse=None, blood_sugar=None, weight=None, notes=None):
+    conn = get_connection()
+    conn.execute("""
         INSERT INTO health_records (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (user_id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes))
@@ -531,204 +528,187 @@ def add_health_record(user_id, record_date, systolic=None, diastolic=None, pulse
     conn.close()
 
 def get_health_records(user_id, days=30):
-    conn = sqlite3.connect("family_bot.db")
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight, notes, created_at
-        FROM health_records
-        WHERE user_id = ? AND record_date >= date('now', '-' || ? || ' days')
-        ORDER BY record_date DESC, record_time DESC
-    """, (user_id, days))
+    cursor.execute("SELECT record_date, record_time, systolic, diastolic, pulse, blood_sugar, weight FROM health_records WHERE user_id = ? AND record_date >= ? ORDER BY record_date DESC", (user_id, start_date))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "id": r[0], "date": r[1], "time": r[2],
-        "systolic": r[3], "diastolic": r[4], "pulse": r[5],
-        "blood_sugar": r[6], "weight": r[7], "notes": r[8], "created_at": r[9]
-    } for r in rows]
+    return [{"date": r[0], "time": r[1], "systolic": r[2], "diastolic": r[3], "pulse": r[4], "blood_sugar": r[5], "weight": r[6]} for r in rows]
 
 def get_health_stats(user_id, days=30):
-    records = get_health_records(user_id, days)
-    if not records:
-        return None
-    systolic_vals = [r['systolic'] for r in records if r['systolic']]
-    diastolic_vals = [r['diastolic'] for r in records if r['diastolic']]
-    pulse_vals = [r['pulse'] for r in records if r['pulse']]
-    sugar_vals = [r['blood_sugar'] for r in records if r['blood_sugar']]
-    weight_vals = [r['weight'] for r in records if r['weight']]
-    return {
-        "systolic_avg": sum(systolic_vals)/len(systolic_vals) if systolic_vals else None,
-        "diastolic_avg": sum(diastolic_vals)/len(diastolic_vals) if diastolic_vals else None,
-        "pulse_avg": sum(pulse_vals)/len(pulse_vals) if pulse_vals else None,
-        "sugar_avg": sum(sugar_vals)/len(sugar_vals) if sugar_vals else None,
-        "weight_avg": sum(weight_vals)/len(weight_vals) if weight_vals else None,
-        "last_systolic": systolic_vals[-1] if systolic_vals else None,
-        "last_diastolic": diastolic_vals[-1] if diastolic_vals else None,
-        "last_pulse": pulse_vals[-1] if pulse_vals else None,
-        "last_sugar": sugar_vals[-1] if sugar_vals else None,
-        "last_weight": weight_vals[-1] if weight_vals else None,
-        "records_count": len(records)
-    }
-
-# ---------- ЭКСПОРТ CSV ----------
-def export_chat_history(user_id):
-    conn = sqlite3.connect("family_bot.db")
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT role, message, created_at FROM chat_history WHERE user_id = ? ORDER BY created_at", (user_id,))
-    rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT AVG(systolic), AVG(diastolic), AVG(pulse), AVG(blood_sugar), AVG(weight), COUNT(*)
+        FROM health_records
+        WHERE user_id = ? AND record_date >= ?
+    """, (user_id, start_date))
+    row = cursor.fetchone()
     conn.close()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Роль", "Сообщение", "Дата и время"])
-    for row in rows:
-        writer.writerow(row)
-    return output.getvalue()
+    if row and row[5] > 0:
+        return {
+            "systolic_avg": row[0] or 0,
+            "diastolic_avg": row[1] or 0,
+            "pulse_avg": row[2] or 0,
+            "sugar_avg": row[3] or 0,
+            "weight_avg": row[4] or 0,
+            "records_count": row[5]
+        }
+    return {"records_count": 0}
 
 def export_health_records(user_id):
-    records = get_health_records(user_id, days=365)
+    records = get_health_records(user_id, days=365*10)
+    import io
     output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Дата", "Время", "Давление", "Пульс", "Сахар", "Вес", "Заметки"])
+    output.write("date,time,systolic,diastolic,pulse,blood_sugar,weight\n")
     for r in records:
-        bp = f"{r['systolic']}/{r['diastolic']}" if r['systolic'] and r['diastolic'] else ""
-        writer.writerow([r['date'], r['time'] or "", bp, r['pulse'] or "", r['blood_sugar'] or "", r['weight'] or "", r['notes'] or ""])
-    return output.getvalue()
-
-def export_family_feed(family_id):
-    feed = get_family_feed(family_id, limit=1000)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Автор", "Сообщение", "Тип", "Дата"])
-    for f in feed:
-        writer.writerow([f['author_name'], f['message'], f['message_type'], f['created_at']])
+        output.write(f"{r['date']},{r['time'] or ''},{r['systolic'] or ''},{r['diastolic'] or ''},{r['pulse'] or ''},{r['blood_sugar'] or ''},{r['weight'] or ''}\n")
     return output.getvalue()
 
 # ---------- БЮДЖЕТ ----------
-def add_transaction(user_id, family_id, amount, category, transaction_type, transaction_date, description=None):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO budget_transactions (user_id, family_id, amount, category, type, transaction_date, description)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, family_id, amount, category, transaction_type, transaction_date, description))
+def init_budget_table():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS budget_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        family_id INTEGER NOT NULL,
+        amount REAL,
+        category TEXT,
+        type TEXT,
+        transaction_date TEXT,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS budget_categories (
+        name TEXT PRIMARY KEY,
+        type TEXT,
+        icon TEXT
+    )''')
+    default_categories = [
+        ('Зарплата', 'income', '💰'), ('Подарок', 'income', '🎁'), ('Возврат долга', 'income', '↩️'),
+        ('Продукты', 'expense', '🍎'), ('Транспорт', 'expense', '🚗'), ('ЖКХ', 'expense', '🏠'),
+        ('Здоровье', 'expense', '💊'), ('Развлечения', 'expense', '🎬'), ('Одежда', 'expense', '👕'),
+        ('Прочее', 'expense', '📌')
+    ]
+    for cat in default_categories:
+        conn.execute("INSERT OR IGNORE INTO budget_categories (name, type, icon) VALUES (?, ?, ?)", cat)
     conn.commit()
     conn.close()
 
-def get_transactions(family_id, limit=50):
-    conn = sqlite3.connect("family_bot.db")
+def add_transaction(user_id, family_id, amount, category, type_, transaction_date, description=None):
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO budget_transactions (user_id, family_id, amount, category, type, transaction_date, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, family_id, amount, category, type_, transaction_date, description))
+    conn.commit()
+    conn.close()
+
+def get_transactions(family_id, limit=100):
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, user_id, amount, category, type, transaction_date, description, created_at
-        FROM budget_transactions
-        WHERE family_id = ?
-        ORDER BY transaction_date DESC LIMIT ?
-    """, (family_id, limit))
+    cursor.execute("SELECT transaction_date, category, amount, type, description FROM budget_transactions WHERE family_id = ? ORDER BY transaction_date DESC LIMIT ?", (family_id, limit))
     rows = cursor.fetchall()
     conn.close()
-    return [{"id": r[0], "user_id": r[1], "amount": r[2], "category": r[3], "type": r[4], "date": r[5], "description": r[6], "created_at": r[7]} for r in rows]
+    return [{"date": r[0], "category": r[1], "amount": r[2], "type": r[3], "description": r[4]} for r in rows]
 
-def get_budget_summary(family_id, start_date=None, end_date=None):
-    conn = sqlite3.connect("family_bot.db")
+def get_budget_summary(family_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    query_income = "SELECT SUM(amount) FROM budget_transactions WHERE family_id = ? AND type = 'income'"
-    query_expense = "SELECT SUM(amount) FROM budget_transactions WHERE family_id = ? AND type = 'expense'"
-    params = [family_id]
-    if start_date:
-        query_income += " AND transaction_date >= ?"
-        query_expense += " AND transaction_date >= ?"
-        params.append(start_date)
-    if end_date:
-        query_income += " AND transaction_date <= ?"
-        query_expense += " AND transaction_date <= ?"
-        params.append(end_date)
-    cursor.execute(query_income, params)
-    income = cursor.fetchone()[0] or 0
-    cursor.execute(query_expense, params)
-    expense = cursor.fetchone()[0] or 0
+    cursor.execute("SELECT SUM(amount) FROM budget_transactions WHERE family_id = ? AND type = 'income'", (family_id,))
+    income = cursor.fetchone()[0] or 0.0
+    cursor.execute("SELECT SUM(amount) FROM budget_transactions WHERE family_id = ? AND type = 'expense'", (family_id,))
+    expense = cursor.fetchone()[0] or 0.0
     conn.close()
     return {"income": income, "expense": expense, "balance": income - expense}
 
 def get_categories():
-    conn = sqlite3.connect("family_bot.db")
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT name, type, icon FROM budget_categories ORDER BY type, name")
+    cursor.execute("SELECT name, type, icon FROM budget_categories")
     rows = cursor.fetchall()
     conn.close()
     return [{"name": r[0], "type": r[1], "icon": r[2]} for r in rows]
 
-def get_category_breakdown(family_id, start_date=None, end_date=None):
-    conn = sqlite3.connect("family_bot.db")
+def get_category_breakdown(family_id):
+    conn = get_connection()
     cursor = conn.cursor()
-    query = """
-        SELECT category, type, SUM(amount) as total
+    cursor.execute("""
+        SELECT category, SUM(amount)
         FROM budget_transactions
-        WHERE family_id = ?
-    """
-    params = [family_id]
-    if start_date:
-        query += " AND transaction_date >= ?"
-        params.append(start_date)
-    if end_date:
-        query += " AND transaction_date <= ?"
-        params.append(end_date)
-    query += " GROUP BY category, type"
-    cursor.execute(query, params)
+        WHERE family_id = ? AND type = 'expense'
+        GROUP BY category
+    """, (family_id,))
     rows = cursor.fetchall()
     conn.close()
-    breakdown = {}
-    for row in rows:
-        breakdown[row[0]] = {"type": row[1], "total": row[2]}
-    return breakdown
+    return {r[0]: r[1] for r in rows}
 
 # ---------- ПРЕМИУМ ----------
+def init_premium_tables():
+    conn = get_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS premium_users (
+        user_id INTEGER PRIMARY KEY,
+        expiry_date TEXT,
+        activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS premium_codes (
+        code TEXT PRIMARY KEY,
+        days INTEGER,
+        used INTEGER DEFAULT 0,
+        used_by INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.commit()
+    conn.close()
+
 def is_premium(user_id):
-    conn = sqlite3.connect("family_bot.db")
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT expires_at FROM premium_users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT expiry_date FROM premium_users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    if not row:
-        return False
-    expires_at = datetime.fromisoformat(row[0])
-    return expires_at > datetime.now()
+    if row:
+        expiry = datetime.fromisoformat(row[0])
+        if expiry > datetime.now():
+            return True
+    return False
 
-def add_premium_user(user_id, days):
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    expires_at = datetime.now() + timedelta(days=days)
-    cursor.execute("INSERT OR REPLACE INTO premium_users (user_id, expires_at) VALUES (?, ?)",
-                   (user_id, expires_at.isoformat()))
+def add_premium_user(user_id, days=30):
+    expiry = (datetime.now() + timedelta(days=days)).isoformat()
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO premium_users (user_id, expiry_date) VALUES (?, ?)", (user_id, expiry))
     conn.commit()
     conn.close()
 
 def generate_code(days):
-    code = secrets.token_hex(8).upper()
-    conn = sqlite3.connect("family_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO premium_codes (code, days) VALUES (?, ?)", (code, days))
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
+    conn = get_connection()
+    conn.execute("INSERT INTO premium_codes (code, days, used) VALUES (?, ?, 0)", (code, days))
     conn.commit()
     conn.close()
     return code
 
 def activate_code(code, user_id):
-    conn = sqlite3.connect("family_bot.db")
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT days, used_by FROM premium_codes WHERE code = ?", (code,))
+    cursor.execute("SELECT days, used FROM premium_codes WHERE code = ?", (code,))
     row = cursor.fetchone()
-    if not row or row[1] is not None:
+    if row and row[1] == 0:
+        days = row[0]
+        add_premium_user(user_id, days)
+        cursor.execute("UPDATE premium_codes SET used = 1, used_by = ? WHERE code = ?", (user_id, code))
+        conn.commit()
         conn.close()
-        return False
-    days = row[0]
-    cursor.execute("UPDATE premium_codes SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ?", (user_id, code))
-    conn.commit()
+        return True
     conn.close()
-    add_premium_user(user_id, days)
-    return True
+    return False
 
 def get_premium_expiry(user_id):
-    conn = sqlite3.connect("family_bot.db")
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT expires_at FROM premium_users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT expiry_date FROM premium_users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
