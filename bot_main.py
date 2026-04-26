@@ -614,7 +614,7 @@ async def premium_info(update, context):
         await update.message.reply_text(get_text(lang, 'premium_info', status=status))
     else:
         status = get_text(lang, 'premium_inactive')
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за 1 Star", callback_data="buy_premium")]])
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌟 Купить за 170 Star", callback_data="buy_premium")]])
         await update.message.reply_text(get_text(lang, 'premium_info', status=status), reply_markup=keyboard)
 
 async def buy_premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
